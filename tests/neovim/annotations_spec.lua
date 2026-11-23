@@ -1,0 +1,126 @@
+describe("Annotations", function()
+    local annotations, bufs
+    local ns = vim.api.nvim_create_namespace("sodium_annotations")
+    local render_ns = vim.api.nvim_create_namespace("sodium_annotations_render")
+    before_each(function()
+        annotations = require("sodium.annotations")
+        bufs = {}
+    end)
+    after_each(function()
+        annotations.clear()
+        for _, buf in ipairs(bufs) do
+            if vim.api.nvim_buf_is_valid(buf) then
+                vim.api.nvim_buf_delete(buf, { force = true })
+            end
+        end
+    end)
+    local function scratch(lines, listed)
+        local buf = vim.api.nvim_create_buf(listed or false, not listed)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+        bufs[#bufs + 1] = buf
+        return buf
+    end
+    local function shown(lines)
+        local buf = scratch(lines)
+        vim.api.nvim_win_set_buf(0, buf)
+        vim.wo.cursorline = false
+        return buf
+    end
+    local function virt(buf)
+        return vim.api.nvim_buf_get_extmarks(buf, render_ns, 0, -1, { details = true })
+    end
+
+    it("shows the note as virtual lines under the last row and highlights every line of the range", function()
+        local buf = shown({ "zero", "one", "two", "three" })
+        annotations.set(buf, 1, 2, "first note\nsecond")
+        local marks = virt(buf)
+        assert.are.equal(1, #marks)
+        assert.are.equal(2, marks[1][2])
+        assert.same(
+            { { { "▎ first note", "AgencyAnnotation" } }, { { "▎ second", "AgencyAnnotation" } } },
+            marks[1][4].virt_lines
+        )
+        vim.cmd("redraw!")
+        local function attr(lnum)
+            local pos = vim.fn.screenpos(0, lnum, 1)
+            return vim.fn.screenattr(pos.row, pos.col + 20)
+        end
+        assert.are.equal(attr(2), attr(3))
+        assert.are_not.equal(attr(1), attr(2))
+        assert.are.equal(attr(1), attr(4))
+    end)
+
+    it("moves the range and its note with inserted lines and keeps it after deletion", function()
+        local buf = scratch({ "aa", "bb", "cc", "dd", "ee" })
+        local mark = annotations.set(buf, 1, 2, "note")
+        vim.api.nvim_buf_set_lines(buf, 1, 1, false, { "new" })
+        assert.same({ { buf = buf, mark = mark, first = 2, last = 3, note = "note" } }, annotations.list())
+        vim.api.nvim_buf_set_text(buf, 3, 1, 3, 1, { "", "" })
+        vim.api.nvim_exec_autocmds("TextChanged", { buffer = buf })
+        assert.are.equal(4, annotations.list()[1].last)
+        assert.are.equal(4, virt(buf)[1][2])
+        vim.api.nvim_buf_set_lines(buf, 2, 5, false, {})
+        assert.are.equal(1, #annotations.list())
+        local item = annotations.list()[1]
+        assert.is_nil(annotations.set(buf, item.first, item.last, "", mark))
+        assert.same({}, vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {}))
+        assert.same({}, virt(buf))
+        assert.same({}, annotations.list())
+    end)
+
+    it("keeps the range when lines are opened below its last row", function()
+        local buf = shown({ "aa", "bb", "cc", "dd" })
+        annotations.set(buf, 1, 2, "note")
+        local captured = annotations.annotations()
+        vim.api.nvim_win_set_cursor(0, { 3, 0 })
+        vim.cmd("normal! oadded")
+        assert.are.equal("added", vim.api.nvim_buf_get_lines(buf, 3, 4, false)[1])
+        assert.are.equal(1, annotations.list()[1].first)
+        assert.are.equal(2, annotations.list()[1].last)
+        vim.api.nvim_win_set_cursor(0, { 3, 0 })
+        vim.cmd("normal! A\rsplit")
+        assert.are.equal("split", vim.api.nvim_buf_get_lines(buf, 3, 4, false)[1])
+        assert.are.equal(2, annotations.list()[1].last)
+        annotations.accept_annotations(captured)
+        assert.same({}, annotations.list())
+    end)
+
+    it("formats annotations across buffers and accepts only the unchanged ones", function()
+        local named = scratch({ "one", "two", "three" })
+        vim.api.nvim_buf_set_name(named, vim.fn.getcwd() .. "/annotated.txt")
+        local unnamed = scratch({ "x", "y" })
+        local first = annotations.set(named, 0, 1, "first")
+        local second = annotations.set(unnamed, 1, 1, "second")
+        local captured = annotations.annotations()
+        assert.same({
+            {
+                buf = named,
+                mark = first,
+                first = 0,
+                last = 1,
+                note = "first",
+                text = "File: annotated.txt\nLines: 1-2\n> one\n> two\nNote: first",
+            },
+            {
+                buf = unnamed,
+                mark = second,
+                first = 1,
+                last = 1,
+                note = "second",
+                text = "File: [buffer " .. unnamed .. "]\nLines: 2-2\n> y\nNote: second",
+            },
+        }, captured)
+        annotations.set(unnamed, 1, 1, "edited", second)
+        annotations.accept_annotations(captured)
+        assert.same({ { buf = unnamed, mark = second, first = 1, last = 1, note = "edited" } }, annotations.list())
+    end)
+
+    it("drops a buffer's annotations when it is unloaded", function()
+        local buf = scratch({ "a", "b" }, true)
+        annotations.set(buf, 0, 1, "note")
+        assert.are.equal(1, #annotations.list())
+        vim.bo[buf].modified = false
+        vim.cmd("bdelete " .. buf)
+        assert.same({}, annotations.list())
+    end)
+end)

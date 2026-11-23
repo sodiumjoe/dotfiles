@@ -1,0 +1,193 @@
+local M = {}
+
+local ns = vim.api.nvim_create_namespace("sodium_annotations")
+local render_ns = vim.api.nvim_create_namespace("sodium_annotations_render")
+local notes, seq = {}, 0
+
+local function highlights()
+    vim.api.nvim_set_hl(0, "AgencyAnnotation", { default = true, link = "DiagnosticVirtualTextInfo" })
+    vim.api.nvim_set_hl(0, "AgencyAnnotationRange", { default = true, link = "CursorLine" })
+end
+highlights()
+vim.api.nvim_create_autocmd(
+    "ColorScheme",
+    { group = vim.api.nvim_create_augroup("sodium_annotations", { clear = true }), callback = highlights }
+)
+
+local function group(buf)
+    return "sodium_annotations_" .. buf
+end
+
+local function drop(buf)
+    notes[buf] = nil
+    pcall(vim.api.nvim_del_augroup_by_name, group(buf))
+end
+
+local function range(buf, mark)
+    local pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, mark, { details = true })
+    if #pos == 0 then
+        notes[buf][mark] = nil
+        return
+    end
+    return pos[1], math.max(pos[1], pos[3].end_row)
+end
+
+local function valid(buf)
+    if notes[buf] and not vim.api.nvim_buf_is_valid(buf) then
+        drop(buf)
+    end
+    return notes[buf] ~= nil
+end
+
+local function render(buf)
+    if not valid(buf) then
+        return
+    end
+    vim.api.nvim_buf_clear_namespace(buf, render_ns, 0, -1)
+    for mark, note in pairs(notes[buf]) do
+        local _, last = range(buf, mark)
+        if last then
+            local lines = {}
+            for _, line in ipairs(vim.split(note.text, "\n")) do
+                lines[#lines + 1] = { { "▎ " .. line, "AgencyAnnotation" } }
+            end
+            note.render = { vim.api.nvim_buf_set_extmark(buf, render_ns, last, 0, { virt_lines = lines }) }
+        end
+    end
+end
+
+local function attach(buf)
+    if notes[buf] then
+        return
+    end
+    notes[buf] = {}
+    local id = vim.api.nvim_create_augroup(group(buf), { clear = true })
+    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+        group = id,
+        buffer = buf,
+        callback = function()
+            if next(notes[buf] or {}) then
+                render(buf)
+            end
+        end,
+    })
+    vim.api.nvim_create_autocmd({ "BufUnload", "BufWipeout" }, {
+        group = id,
+        buffer = buf,
+        callback = function()
+            drop(buf)
+        end,
+    })
+end
+
+function M.delete(buf, mark)
+    if not valid(buf) then
+        return
+    end
+    vim.api.nvim_buf_del_extmark(buf, ns, mark)
+    notes[buf][mark] = nil
+    render(buf)
+end
+
+function M.set(buf, first, last, text, mark)
+    if not text or not text:match("%S") then
+        if mark then
+            M.delete(buf, mark)
+        end
+        return
+    end
+    attach(buf)
+    local line = vim.api.nvim_buf_get_lines(buf, last, last + 1, true)[1]
+    mark = vim.api.nvim_buf_set_extmark(buf, ns, first, 0, {
+        id = mark,
+        end_row = last,
+        end_col = #line,
+        right_gravity = true,
+        end_right_gravity = false,
+        line_hl_group = "AgencyAnnotationRange",
+    })
+    seq = seq + 1
+    notes[buf][mark] = { text = text, render = {}, seq = seq }
+    render(buf)
+    return mark
+end
+
+function M.at(buf, row)
+    if not valid(buf) then
+        return
+    end
+    local found
+    for mark, note in pairs(notes[buf]) do
+        local first, last = range(buf, mark)
+        if first and first <= row and row <= last and (not found or note.seq > notes[buf][found].seq) then
+            found = mark
+        end
+    end
+    return found
+end
+
+function M.list(only)
+    local items = {}
+    for buf in pairs(notes) do
+        if (not only or buf == only) and valid(buf) then
+            for mark, note in pairs(notes[buf]) do
+                local first, last = range(buf, mark)
+                if first then
+                    items[#items + 1] = { buf = buf, mark = mark, first = first, last = last, note = note.text }
+                end
+            end
+        end
+    end
+    table.sort(items, function(a, b)
+        if a.buf ~= b.buf then
+            return a.buf < b.buf
+        end
+        if a.first ~= b.first then
+            return a.first < b.first
+        end
+        return a.mark < b.mark
+    end)
+    return items
+end
+
+function M.annotations()
+    local items = M.list()
+    for _, item in ipairs(items) do
+        local name = vim.api.nvim_buf_get_name(item.buf)
+        local block = {
+            "File: " .. (name == "" and "[buffer " .. item.buf .. "]" or vim.fn.fnamemodify(name, ":.")),
+            ("Lines: %d-%d"):format(item.first + 1, item.last + 1),
+        }
+        for _, line in ipairs(vim.api.nvim_buf_get_lines(item.buf, item.first, item.last + 1, false)) do
+            block[#block + 1] = "> " .. line
+        end
+        block[#block + 1] = "Note: " .. item.note
+        item.text = table.concat(block, "\n")
+    end
+    return items
+end
+
+function M.accept_annotations(captured)
+    for _, item in ipairs(captured) do
+        local note = valid(item.buf) and notes[item.buf][item.mark]
+        if note and note.text == item.note then
+            local first, last = range(item.buf, item.mark)
+            if first == item.first and last == item.last then
+                M.delete(item.buf, item.mark)
+            end
+        end
+    end
+end
+
+function M.clear(buf)
+    local bufs = buf and { buf } or vim.tbl_keys(notes)
+    for _, b in ipairs(bufs) do
+        if valid(b) then
+            vim.api.nvim_buf_clear_namespace(b, ns, 0, -1)
+            vim.api.nvim_buf_clear_namespace(b, render_ns, 0, -1)
+        end
+        drop(b)
+    end
+end
+
+return M
