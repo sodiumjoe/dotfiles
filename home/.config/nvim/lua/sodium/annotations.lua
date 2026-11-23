@@ -258,7 +258,11 @@ function M.edit(buf, first, last)
         done = true
         close()
     end
-    vim.keymap.set({ "n", "i" }, "<C-s>", save, { buffer = fbuf })
+    vim.keymap.set("n", "<C-s>", save, { buffer = fbuf })
+    vim.keymap.set("i", "<C-s>", function()
+        vim.cmd("stopinsert")
+        vim.schedule(save)
+    end, { buffer = fbuf })
     vim.keymap.set("n", "<CR>", save, { buffer = fbuf })
     vim.keymap.set("n", "q", cancel, { buffer = fbuf })
     vim.keymap.set("n", "<Esc>", cancel, { buffer = fbuf })
