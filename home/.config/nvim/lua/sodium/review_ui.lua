@@ -193,8 +193,13 @@ function M.submit()
         if not choice then
             return
         end
-        vim.ui.input({ prompt = "Review body (optional): " }, function(body)
+        local required = choice ~= "APPROVE"
+        vim.ui.input({ prompt = required and "Review body: " or "Review body (optional): " }, function(body)
             if body == nil then
+                return
+            end
+            if required and vim.trim(body) == "" then
+                vim.notify("A body is required for " .. choice, vim.log.levels.WARN)
                 return
             end
             vim.notify("Submitting " .. choice:lower() .. " for PR #" .. session.id .. "...")
@@ -305,7 +310,7 @@ function M.show_help()
         "<leader>pn mark reviewed and next",
         "<Tab> toggle reviewed in picker",
         "<C-o> open file without diff",
-        "<leader>ca/cn/cp/cl/cd/ce comments",
+        "<leader>cc/cn/cp/cl/cd annotations",
         "<leader>ai send notes to agent",
         "<leader>pa submit PR review",
         "<leader>px abort review",

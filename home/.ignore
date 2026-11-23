@@ -23,6 +23,5 @@ bower_components
 .bundle
 .tmp
 .git
-.nvim-comments.json
 .review/
 **/.claude/settings.local.json

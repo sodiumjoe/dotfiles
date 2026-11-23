@@ -95,8 +95,7 @@ function exitSession(cwd = process.cwd()) {
   }
 
   fs.rmSync(reviewDir(toplevel), { recursive: true, force: true });
-  fs.rmSync(path.join(toplevel, ".nvim-comments.json"), { force: true });
-  nvimCall("pcall(vim.cmd, 'CommentRefresh') require('sodium.review').reset() return 0");
+  nvimCall("require('sodium.review').reset() return 0");
   return { status: "exited" };
 }
 
@@ -156,34 +155,10 @@ function enterPr(pr, cwd = process.cwd()) {
       '.commits[] | "\\(.oid) \\(.messageHeadline)"',
     ]),
   );
-  let comments = "[]";
-  try {
-    comments = gh(toplevel, ["api", `repos/{owner}/{repo}/pulls/${prNumber}/comments`, "--paginate"]);
-  } catch {}
-  fs.writeFileSync(path.join(rdir, "pr-comments.json"), comments);
 
   nvimCall("require('sodium.review').load() return 0");
   const { mode, id, base_ref, head_ref } = session;
   return { mode, id, base_ref, head_ref, toplevel };
-}
-
-function localComments(toplevel, user) {
-  let data;
-  try {
-    data = JSON.parse(fs.readFileSync(path.join(toplevel, ".nvim-comments.json"), "utf-8"));
-  } catch {
-    return [];
-  }
-
-  return Object.entries(data.comments || {})
-    .filter(([id, comment]) => (comment.actor === user || comment.author === user) && !/^\d+$/.test(id))
-    .map(([, comment]) => {
-      let file = (comment.file || "").replace(/ \([^)]*\)$/, "");
-      if (file.startsWith(toplevel + "/")) file = file.slice(toplevel.length + 1);
-      const line = comment.line ?? comment.line_end ?? comment.line_start;
-      return { path: file, line, side: "RIGHT", body: comment.body };
-    })
-    .filter((comment) => comment.line != null);
 }
 
 function submit(event, body = "", cwd = process.cwd()) {
@@ -192,7 +167,7 @@ function submit(event, body = "", cwd = process.cwd()) {
   if (!session) throw new Error("no review session");
   if (session.mode !== "pr") throw new Error("not a PR session");
 
-  const payload = { event, comments: localComments(toplevel, session.user) };
+  const payload = { event };
   if (body) payload.body = body;
   gh(
     toplevel,
@@ -208,7 +183,6 @@ module.exports = {
   exitSession,
   gh,
   git,
-  localComments,
   readSession,
   sessionPath,
   submit,

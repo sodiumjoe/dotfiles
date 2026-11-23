@@ -20,7 +20,7 @@ describe("code review sessions", { concurrency: 1 }, () => {
     git(["config", "user.name", "Test User"]);
     fs.writeFileSync(
       path.join(repoDir, ".gitignore"),
-      ".review/\n.nvim-comments.json\n",
+      ".review/\n",
     );
     fs.writeFileSync(path.join(repoDir, "file.txt"), "base\n");
     git(["add", ".gitignore", "file.txt"]);
