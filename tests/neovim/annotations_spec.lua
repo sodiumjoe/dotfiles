@@ -36,6 +36,13 @@ describe("Annotations", function()
     local function virt(buf)
         return vim.api.nvim_buf_get_extmarks(buf, render_ns, 0, -1, { details = true })
     end
+    local function rows(lines)
+        return vim.tbl_map(function(chunks)
+            return table.concat(vim.tbl_map(function(chunk)
+                return chunk[1]
+            end, chunks))
+        end, lines)
+    end
     local function float()
         local win = vim.api.nvim_get_current_win()
         assert.are_not.equal("", vim.api.nvim_win_get_config(win).relative)
@@ -51,10 +58,18 @@ describe("Annotations", function()
         local marks = virt(buf)
         assert.are.equal(1, #marks)
         assert.are.equal(2, marks[1][2])
-        assert.same(
-            { { { "▎ first note", "AgencyAnnotation" } }, { { "▎ second", "AgencyAnnotation" } } },
-            marks[1][4].virt_lines
-        )
+        assert.same({
+            "╭────────────╮",
+            "│ first note │",
+            "│ second     │",
+            "╰────────────╯",
+        }, rows(marks[1][4].virt_lines))
+        assert.same({ "first note", "AgencyAnnotation" }, marks[1][4].virt_lines[2][3])
+        local win = vim.api.nvim_get_current_win()
+        assert.is_nil(annotations.gutter(win, 3, -4))
+        assert.truthy(annotations.gutter(win, 3, -3))
+        assert.is_nil(annotations.gutter(win, 3, -2))
+        assert.is_nil(annotations.gutter(win, 2, -1))
         vim.cmd("redraw!")
         local function attr(lnum)
             local pos = vim.fn.screenpos(0, lnum, 1)
@@ -158,7 +173,7 @@ describe("Annotations", function()
             { { buf = buf, mark = annotations.at(buf, 2), first = 2, last = 2, note = "fix this" } },
             annotations.list()
         )
-        assert.same({ { { "▎ fix this", "AgencyAnnotation" } } }, virt(buf)[1][4].virt_lines)
+        assert.same({ "╭──────────╮", "│ fix this │", "╰──────────╯" }, rows(virt(buf)[1][4].virt_lines))
     end)
 
     it("annotates the visual line range", function()

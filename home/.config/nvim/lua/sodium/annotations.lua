@@ -2,12 +2,14 @@ local M = {}
 
 local ns = vim.api.nvim_create_namespace("sodium_annotations")
 local render_ns = vim.api.nvim_create_namespace("sodium_annotations_render")
-local notes, seq = {}, 0
+local notes, icons, seq = {}, {}, 0
+local icon = ""
 
 local function highlights()
-    local comment = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
-    vim.api.nvim_set_hl(0, "AgencyAnnotation", { default = true, fg = comment.fg, italic = true })
-    vim.api.nvim_set_hl(0, "AgencyAnnotationSign", { default = true, fg = comment.fg })
+    local yellow = require("sodium.config.colorscheme").palette.yellow
+    vim.api.nvim_set_hl(0, "AgencyAnnotation", { default = true, fg = yellow, italic = true })
+    vim.api.nvim_set_hl(0, "AgencyAnnotationBorder", { default = true, fg = yellow })
+    vim.api.nvim_set_hl(0, "AgencyAnnotationSign", { default = true, fg = yellow })
     vim.api.nvim_set_hl(0, "AgencyAnnotationRange", { default = true, link = "CursorLine" })
 end
 highlights()
@@ -21,7 +23,7 @@ local function group(buf)
 end
 
 local function drop(buf)
-    notes[buf] = nil
+    notes[buf], icons[buf] = nil, nil
     pcall(vim.api.nvim_del_augroup_by_name, group(buf))
 end
 
@@ -43,20 +45,56 @@ local function valid(buf)
     return notes[buf] ~= nil
 end
 
+local function box(buf, first, text)
+    local indent = (" "):rep(vim.api.nvim_buf_call(buf, function()
+        return vim.fn.indent(first + 1)
+    end))
+    local body, width = vim.split(text, "\n"), 0
+    for _, line in ipairs(body) do
+        width = math.max(width, vim.fn.strdisplaywidth(line))
+    end
+    local rule = ("─"):rep(width + 2)
+    local lines = { { { indent }, { "╭" .. rule .. "╮", "AgencyAnnotationBorder" } } }
+    for _, line in ipairs(body) do
+        lines[#lines + 1] = {
+            { indent },
+            { "│ ", "AgencyAnnotationBorder" },
+            { line .. (" "):rep(width - vim.fn.strdisplaywidth(line)), "AgencyAnnotation" },
+            { " │", "AgencyAnnotationBorder" },
+        }
+    end
+    lines[#lines + 1] = { { indent }, { "╰" .. rule .. "╯", "AgencyAnnotationBorder" } }
+    return lines
+end
+
 local function render(buf)
     if not valid(buf) then
         return
     end
     vim.api.nvim_buf_clear_namespace(buf, render_ns, 0, -1)
+    local rows = {}
     for mark, note in pairs(notes[buf]) do
-        local _, last = range(buf, mark)
+        local first, last = range(buf, mark)
         if last then
-            local lines = {}
-            for _, line in ipairs(vim.split(note.text, "\n")) do
-                lines[#lines + 1] = { { "▎ " .. line, "AgencyAnnotation" } }
-            end
-            vim.api.nvim_buf_set_extmark(buf, render_ns, last, 0, { virt_lines = lines })
+            rows[last] = rows[last] or {}
+            table.insert(rows[last], { first = first, seq = note.seq, text = note.text })
         end
+    end
+    icons[buf] = {}
+    for last, stack in pairs(rows) do
+        table.sort(stack, function(a, b)
+            if a.first ~= b.first then
+                return a.first < b.first
+            end
+            return a.seq < b.seq
+        end)
+        local lines, marks = {}, {}
+        for _, item in ipairs(stack) do
+            marks[#lines + 2] = true
+            vim.list_extend(lines, box(buf, item.first, item.text))
+        end
+        icons[buf][last] = marks
+        vim.api.nvim_buf_set_extmark(buf, render_ns, last, 0, { virt_lines = lines })
     end
 end
 
@@ -109,9 +147,6 @@ function M.set(buf, first, last, text, mark)
         right_gravity = true,
         end_right_gravity = false,
         line_hl_group = "AgencyAnnotationRange",
-        sign_text = "",
-        sign_hl_group = "AgencyAnnotationSign",
-        priority = 5,
     })
     seq = seq + 1
     notes[buf][mark] = { text = text, seq = seq }
@@ -362,6 +397,23 @@ function M.pick()
         }
     end
     require("snacks").picker({ title = "Annotations", items = items })
+end
+
+function M.gutter(win, lnum, virtnum)
+    local buf = vim.api.nvim_win_get_buf(win)
+    local marks = icons[buf] and icons[buf][lnum - 1]
+    if not marks or virtnum >= 0 then
+        return
+    end
+    local total = 0
+    for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, -1, { lnum - 1, 0 }, { lnum - 1, -1 }, { details = true })) do
+        if mark[4].virt_lines and not mark[4].virt_lines_above then
+            total = total + #mark[4].virt_lines
+        end
+    end
+    if marks[total + virtnum + 1] then
+        return "%=%#AgencyAnnotationSign#" .. icon .. "%*"
+    end
 end
 
 function M.setup()

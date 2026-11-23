@@ -40,8 +40,14 @@ return {
             require("statuscol").setup({
                 segments = {
                     {
-                        text = { builtin.lnumfunc },
-                        sign = { namespace = { "diagnostic", "sodium_annotations" } },
+                        text = {
+                            function(args, segment)
+                                return args.virtnum < 0
+                                        and require("sodium.annotations").gutter(args.win, args.lnum, args.virtnum)
+                                    or builtin.lnumfunc(args, segment)
+                            end,
+                        },
+                        sign = { namespace = { "diagnostic" } },
                     },
                     { text = { " " } },
                     {
