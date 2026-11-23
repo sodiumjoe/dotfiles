@@ -10,7 +10,6 @@ local function highlights()
     vim.api.nvim_set_hl(0, "AgencyAnnotation", { default = true, fg = yellow, italic = true })
     vim.api.nvim_set_hl(0, "AgencyAnnotationBorder", { default = true, fg = yellow })
     vim.api.nvim_set_hl(0, "AgencyAnnotationSign", { default = true, fg = yellow })
-    vim.api.nvim_set_hl(0, "AgencyAnnotationRange", { default = true, link = "CursorLine" })
 end
 highlights()
 vim.api.nvim_create_autocmd(
@@ -146,7 +145,6 @@ function M.set(buf, first, last, text, mark)
         end_col = #line,
         right_gravity = true,
         end_right_gravity = false,
-        line_hl_group = "AgencyAnnotationRange",
     })
     seq = seq + 1
     notes[buf][mark] = { text = text, seq = seq }

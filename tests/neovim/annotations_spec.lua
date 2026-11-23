@@ -52,7 +52,7 @@ describe("Annotations", function()
         vim.fn.maparg(lhs, mode, false, true).callback()
     end
 
-    it("shows the note as virtual lines under the last row and highlights every line of the range", function()
+    it("shows the note as a bordered box under the last row with the gutter icon on its first line", function()
         local buf = shown({ "zero", "one", "two", "three" })
         annotations.set(buf, 1, 2, "first note\nsecond")
         local marks = virt(buf)
@@ -70,14 +70,6 @@ describe("Annotations", function()
         assert.truthy(annotations.gutter(win, 3, -3))
         assert.is_nil(annotations.gutter(win, 3, -2))
         assert.is_nil(annotations.gutter(win, 2, -1))
-        vim.cmd("redraw!")
-        local function attr(lnum)
-            local pos = vim.fn.screenpos(0, lnum, 1)
-            return vim.fn.screenattr(pos.row, pos.col + 20)
-        end
-        assert.are.equal(attr(2), attr(3))
-        assert.are_not.equal(attr(1), attr(2))
-        assert.are.equal(attr(1), attr(4))
     end)
 
     it("moves the range and its note with inserted lines and keeps it after deletion", function()
