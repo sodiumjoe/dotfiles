@@ -30,6 +30,7 @@ run() {
 
 run agency-build npm --prefix agency run build
 run deployment bash test-env.sh
+run hooks bash -c 'for test in hooks/test/*.test.sh; do "$test" || exit 1; done'
 run work-cli npm --prefix work-cli test
 run agency bash -c 'cd agency && node dist/scripts/test-groups.js'
 run node-bin npm --prefix node-bin test
