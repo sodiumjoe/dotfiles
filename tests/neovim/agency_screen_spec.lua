@@ -28,6 +28,28 @@ describe("Agency screen", function()
         return math.floor(vim.o.lines * 0.5)
     end
 
+    it("keeps a chat that follows the end at the end through every layout state", function()
+        local text = {}
+        for i = 1, 200 do text[#text + 1] = "line " .. i end
+        f.client:_handle_message({ method = "session/update", params = { sessionId = f.manager.session_id,
+            update = { sessionUpdate = "agent_message_chunk", content = { type = "text", text = table.concat(text, "\n") } } } })
+        f.flush()
+        local function at_end()
+            local win = f.manager.widget.win_nrs.chat
+            vim.cmd("redraw")
+            local count = vim.api.nvim_buf_line_count(f.manager.message_writer.bufnr)
+            assert.are.equal(count, vim.api.nvim_win_get_cursor(win)[1])
+            assert.are.equal(count, vim.fn.line("w$", win))
+        end
+        at_end()
+        for _, expected in ipairs({ "document", "conversation", "split" }) do
+            screen.cycle()
+            f.flush()
+            assert.are.equal(expected, screen.state())
+            if expected ~= "document" then at_end() end
+        end
+    end)
+
     it("derives conversation, split, document and none from the windows in the tab", function()
         assert.are.equal("split", screen.state())
         f.manager.widget:hide()

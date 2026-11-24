@@ -53,6 +53,22 @@ function M.manager()
     end
 end
 
+local function follows(win)
+    return win ~= nil and vim.api.nvim_win_is_valid(win)
+        and vim.api.nvim_win_get_cursor(win)[1] == vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
+end
+
+local function keep_end(fn)
+    local manager = M.manager()
+    local chat = manager and manager.widget.win_nrs.chat
+    local follow = follows(chat)
+    local result = fn()
+    if follow and vim.api.nvim_win_is_valid(chat) then
+        vim.api.nvim_win_call(chat, function() vim.cmd("noautocmd normal! Gzb") end)
+    end
+    return result
+end
+
 local function release(tab)
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tabpage(tab))) do
         if vim.w[win].agency_held then
@@ -129,11 +145,13 @@ function M.ensure_document(buf)
     end
     local manager = M.manager()
     local visible = manager and manager.widget:get_visible_tab_id() == vim.api.nvim_get_current_tabpage()
-    return hold(vim.api.nvim_open_win(
-        buf or document_buffer(),
-        false,
-        { split = "above", win = -1, height = visible and half() or nil }
-    ))
+    return keep_end(function()
+        return hold(vim.api.nvim_open_win(
+            buf or document_buffer(),
+            false,
+            { split = "above", win = -1, height = visible and half() or nil }
+        ))
+    end)
 end
 
 function M.focus_document()
@@ -142,10 +160,7 @@ function M.focus_document()
     return win
 end
 
-function M.resize()
-    if M.state() ~= "split" then
-        return
-    end
+local function resize()
     local win = M.document_window() or documents()[1]
     local pos, width = vim.fn.win_screenpos(win), vim.api.nvim_win_get_width(win)
     local top, stack, starts = vim.fn.win_screenpos(M.manager().widget.win_nrs.chat)[1], {}, {}
@@ -173,6 +188,13 @@ function M.resize()
     hold(win)
 end
 
+function M.resize()
+    if M.state() ~= "split" then
+        return
+    end
+    keep_end(resize)
+end
+
 local function empty(win)
     local buf = vim.api.nvim_win_get_buf(win)
     return vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) == "" and not vim.bo[buf].modified
@@ -185,14 +207,14 @@ function M.close_empty()
         or #vim.tbl_filter(empty, wins) ~= #wins then
         return
     end
-    for _, win in ipairs(wins) do
+    keep_end(function() for _, win in ipairs(wins) do
         local buf = vim.api.nvim_win_get_buf(win)
         if pcall(vim.api.nvim_win_close, win, false) and vim.api.nvim_buf_is_valid(buf) and #vim.fn.win_findbuf(buf) == 0
             and vim.api.nvim_buf_get_name(buf) == "" and not vim.bo[buf].modified and vim.api.nvim_buf_line_count(buf) == 1
             and vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == "" then
             pcall(vim.api.nvim_buf_delete, buf, { force = true })
         end
-    end
+    end end)
 end
 
 local function placed(win)
@@ -209,9 +231,11 @@ local function placed(win)
 end
 
 local function close_documents()
-    for _, win in ipairs(documents()) do
-        pcall(vim.api.nvim_win_close, win, true)
-    end
+    keep_end(function()
+        for _, win in ipairs(documents()) do
+            pcall(vim.api.nvim_win_close, win, true)
+        end
+    end)
 end
 
 function M.cycle()
