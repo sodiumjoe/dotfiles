@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>bundleid</key>
+	<string>com.moon.youtube-music</string>
+	<key>category</key>
+	<string>Music</string>
+	<key>connections</key>
+	<dict>
+		<key>60DF642F-E1C4-4860-BE85-EEFF93F7916B</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>4328FB52-5D40-470B-AC0F-8159273CD906</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+		</array>
+		<key>D19DC09B-8943-48FB-AC6E-E1CA9EEB9EBC</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>4328FB52-5D40-470B-AC0F-8159273CD906</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+		</array>
+		<key>4328FB52-5D40-470B-AC0F-8159273CD906</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>DB566ED8-3799-48E0-BE7B-561C8255C1E1</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+		</array>
+	</dict>
+	<key>createdby</key>
+	<string>Joe Moon</string>
+	<key>description</key>
+	<string>Control the YouTube Music Chrome PWA with yt commands</string>
+	<key>disabled</key>
+	<false/>
+	<key>name</key>
+	<string>YouTube Music</string>
+	<key>objects</key>
+	<array>
+		<dict>
+			<key>uid</key>
+			<string>60DF642F-E1C4-4860-BE85-EEFF93F7916B</string>
+			<key>type</key>
+			<string>alfred.workflow.input.scriptfilter</string>
+			<key>version</key>
+			<integer>3</integer>
+			<key>config</key>
+			<dict>
+				<key>alfredfiltersresults</key>
+				<false/>
+				<key>argumenttreatemptyqueryasnil</key>
+				<false/>
+				<key>argumenttrimmode</key>
+				<integer>0</integer>
+				<key>argumenttype</key>
+				<integer>1</integer>
+				<key>escaping</key>
+				<integer>68</integer>
+				<key>keyword</key>
+				<string>yt</string>
+				<key>queuedelaycustom</key>
+				<integer>1</integer>
+				<key>queuedelayimmediatelyinitially</key>
+				<true/>
+				<key>queuedelaymode</key>
+				<integer>0</integer>
+				<key>queuemode</key>
+				<integer>1</integer>
+				<key>runningsubtext</key>
+				<string>Loading commands…</string>
+				<key>script</key>
+				<string>exec /usr/bin/osascript -l JavaScript commands.js "$1"</string>
+				<key>scriptargtype</key>
+				<integer>1</integer>
+				<key>scriptfile</key>
+				<string></string>
+				<key>subtext</key>
+				<string>play, pause, next, prev, toggle, status</string>
+				<key>title</key>
+				<string>YouTube Music</string>
+				<key>type</key>
+				<integer>0</integer>
+				<key>withspace</key>
+				<true/>
+			</dict>
+		</dict>
+		<dict>
+			<key>uid</key>
+			<string>4328FB52-5D40-470B-AC0F-8159273CD906</string>
+			<key>type</key>
+			<string>alfred.workflow.action.script</string>
+			<key>version</key>
+			<integer>2</integer>
+			<key>config</key>
+			<dict>
+				<key>concurrently</key>
+				<false/>
+				<key>escaping</key>
+				<integer>68</integer>
+				<key>script</key>
+				<string>exec /usr/bin/osascript -l JavaScript control.js "$1"</string>
+				<key>scriptargtype</key>
+				<integer>1</integer>
+				<key>scriptfile</key>
+				<string></string>
+				<key>type</key>
+				<integer>0</integer>
+			</dict>
+		</dict>
+		<dict>
+			<key>uid</key>
+			<string>DB566ED8-3799-48E0-BE7B-561C8255C1E1</string>
+			<key>type</key>
+			<string>alfred.workflow.output.notification</string>
+			<key>version</key>
+			<integer>1</integer>
+			<key>config</key>
+			<dict>
+				<key>lastpathcomponent</key>
+				<false/>
+				<key>onlyshowifquerypopulated</key>
+				<true/>
+				<key>removeextension</key>
+				<false/>
+				<key>text</key>
+				<string>{query}</string>
+				<key>title</key>
+				<string>YouTube Music</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>uid</key>
+			<string>D19DC09B-8943-48FB-AC6E-E1CA9EEB9EBC</string>
+			<key>type</key>
+			<string>alfred.workflow.trigger.external</string>
+			<key>version</key>
+			<integer>1</integer>
+			<key>config</key>
+			<dict>
+				<key>triggerid</key>
+				<string>control</string>
+			</dict>
+		</dict>
+	</array>
+	<key>readme</key>
+	<string>Type yt in Alfred to choose a command, or type a command directly:
+
+- yt or yt toggle: toggle playback
+- yt play: resume playback
+- yt pause: pause playback
+- yt next: skip to the next track
+- yt prev: select the previous track
+- yt status: show the current track and playback state
+
+Aliases: resume, previous, back, playpause.
+
+Keep YouTube Music open in a Chrome PWA or tab. Controls run in the background without activating Chrome or the PWA. If several YouTube Music tabs are open, the first matching tab is used.
+
+In a regular Chrome window using the same profile as the PWA, enable View &gt; Developer &gt; Allow JavaScript from Apple Events. macOS may also ask you to allow Alfred to control Google Chrome.
+
+The control external trigger accepts the same canonical command names.</string>
+	<key>uidata</key>
+	<dict>
+		<key>60DF642F-E1C4-4860-BE85-EEFF93F7916B</key>
+		<dict>
+			<key>xpos</key>
+			<integer>20</integer>
+			<key>ypos</key>
+			<integer>40</integer>
+		</dict>
+		<key>D19DC09B-8943-48FB-AC6E-E1CA9EEB9EBC</key>
+		<dict>
+			<key>xpos</key>
+			<integer>20</integer>
+			<key>ypos</key>
+			<integer>200</integer>
+		</dict>
+		<key>4328FB52-5D40-470B-AC0F-8159273CD906</key>
+		<dict>
+			<key>xpos</key>
+			<integer>280</integer>
+			<key>ypos</key>
+			<integer>40</integer>
+		</dict>
+		<key>DB566ED8-3799-48E0-BE7B-561C8255C1E1</key>
+		<dict>
+			<key>xpos</key>
+			<integer>540</integer>
+			<key>ypos</key>
+			<integer>40</integer>
+		</dict>
+	</dict>
+	<key>version</key>
+	<string>1.0.0</string>
+	<key>webaddress</key>
+	<string></string>
+	<key>userconfigurationconfig</key>
+	<array/>
+	<key>variablesdontexport</key>
+	<array/>
+</dict>
+</plist>
