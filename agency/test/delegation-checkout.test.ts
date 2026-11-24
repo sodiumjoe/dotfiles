@@ -1,15 +1,15 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { chmod, cp, lstat, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import test from "node:test"
+import test, { after } from "node:test"
 import { findCheckout, gitEnvironment, normalizeRemote, prepareCheckout } from "../src/delegation/checkout.js"
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim()
-async function repos(t: { after(fn: () => Promise<void>): void }) {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "agency-checkout-")))
-  t.after(() => rm(root, { recursive: true, force: true }))
+let template: Promise<{ root: string; first: string }> | undefined
+async function build() {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "agency-checkout-template-")))
   const origin = join(root, "origin.git"), work = join(root, "src", "mint")
   git(root, "init", "-q", "--bare", origin)
   git(root, "clone", "-q", origin, work)
@@ -17,7 +17,17 @@ async function repos(t: { after(fn: () => Promise<void>): void }) {
   const first = git(work, "rev-parse", "HEAD")
   await writeFile(join(work, "a.txt"), "two"); git(work, "commit", "-qam", "two"); git(work, "push", "-q", "origin", "HEAD:feature")
   git(work, "reset", "-q", "--hard", first)
-  return { root, origin, work, first }
+  return { root, first }
+}
+after(async () => { if (template) await rm((await template).root, { recursive: true, force: true }) })
+async function repos(t: { after(fn: () => Promise<void>): void }) {
+  const built = await (template ??= build())
+  const root = await realpath(await mkdtemp(join(tmpdir(), "agency-checkout-")))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await cp(built.root, root, { recursive: true, filter: async source => !(await lstat(source)).isSocket() })
+  const origin = join(root, "origin.git"), work = join(root, "src", "mint")
+  git(work, "remote", "set-url", "origin", origin)
+  return { root, origin, work, first: built.first }
 }
 
 test("remote URLs of every common form normalize to host and path", () => {

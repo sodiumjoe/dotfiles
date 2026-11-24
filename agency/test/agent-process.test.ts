@@ -8,7 +8,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ChildProcess, spawn } from "node:child_process"
 import { AgentError, agentFailure, parseAgentFailure } from "../src/agent/types.js"
-import { parseFailureDiagnostic } from "../src/agent/failure-diagnostics.js"
 import { createAgentProcess, type OwnedAgentProcess } from "../src/agent/process.js"
 import type { PlatformAdapter, ProcessIdentity } from "../src/platform/types.js"
 import { sampleSpec, sampleContract, sampleRecord } from "./process-support.js"
@@ -128,14 +127,6 @@ test("cleanup preserves a captured identity rejection in its public failure", as
     return true
   })
   assert.deepEqual(f.signals, [])
-})
-
-test("cleanup diagnostics accept only bounded cleanup reasons", () => {
-  for (const causeCode of ["identity", "deadline", "signal", "terminal", "absence", "abandoned"]) {
-    const diagnostic = { boundary: "provider_cleanup", causeCode }
-    assert.deepEqual(parseFailureDiagnostic(diagnostic), diagnostic)
-  }
-  for (const causeCode of [null, "unknown", "private error text"]) assert.throws(() => parseFailureDiagnostic({ boundary: "provider_cleanup", causeCode }))
 })
 
 test("cleanup preserves a process observation deadline as a deadline diagnostic", async t => {

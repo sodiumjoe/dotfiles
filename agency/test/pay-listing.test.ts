@@ -25,9 +25,9 @@ test("a failing pay reports its exit code and the end of its stderr", async t =>
 })
 
 test("a pay whose helper holds its output open is killed with the helper at the deadline", async t => {
-  const { command, directory } = await fakePay(t, `(sleep 2; touch "$DIR/survived") &\nexit 0`)
-  await assert.rejects(runPayListing({ command, timeoutMs: 1000 }), /LISTING_TIMEOUT/)
-  await new Promise(resolve => setTimeout(resolve, 2000))
+  const { command, directory } = await fakePay(t, `(sleep 0.4; touch "$DIR/survived") &\nexit 0`)
+  await assert.rejects(runPayListing({ command, timeoutMs: 200 }), /LISTING_TIMEOUT/)
+  await new Promise(resolve => setTimeout(resolve, 700))
   await assert.rejects(access(join(directory, "survived")), /ENOENT/)
 })
 

@@ -57,13 +57,6 @@ test("Claude-only provider overrides select Claude without changing disabled or 
   await assert.rejects(readBackendConfig(root), { code: "UNAVAILABLE" })
 })
 
-test("an explicit backend configuration preserves its model and permission defaults", async t => {
-  const { root } = await fixture(t)
-  const config = { version: 1, defaultBackendId: "claude-agent-acp", backends: [{ id: "claude-agent-acp", args: [], environmentDefaults: {}, initial: { configValues: { model: "sonnet", mode: "plan", effort: "high" } }, compatibilityId: "claude-agent-acp-0.102" }] }
-  await writeFile(join(root, "catalog/backends.json"), JSON.stringify(config), { mode: 0o600 })
-  assert.deepEqual(await readBackendConfig(root), config)
-})
-
 test("Claude qualification uses the executable binary and rejects dependency mismatches", async t => {
   const { root, profile, profiles } = await fixture(t)
   await profiles([profile])

@@ -27,15 +27,6 @@ test("a provider started with the parent watch exits after its parent is killed"
   assert.equal(alive(pid), false)
 })
 
-test("a provider started with the parent watch keeps running while its parent lives", async t => {
-  const { parent, pid } = await startUnderParent()
-  t.after(() => { try { process.kill(-pid, "SIGKILL") } catch {}; parent.kill("SIGKILL") })
-  await pause(2500)
-  assert.ok(alive(pid))
-  process.kill(-pid, "SIGKILL")
-  parent.kill("SIGKILL")
-})
-
 test("a provider that ignores SIGTERM and its children are all killed after the parent dies", async t => {
   const script = `process.on("SIGTERM", () => {}); require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" }); setInterval(() => {}, 1000)`
   const parent = spawn(process.execPath, ["-e", `

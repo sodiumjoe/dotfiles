@@ -36,10 +36,10 @@ test("models come from the provider's own listing and are cached in memory", asy
 
 test("a listing that does not answer times out with the reason and is retried next time", async t => {
   const { state, listings } = await codexProfile(t, "hang")
-  const cache = createModelCache({ root: state, timeoutMs: 1500 })
+  const cache = createModelCache({ root: state, timeoutMs: 600 })
   const started = Date.now(), listing = await cache.list("codex-acp")
   assert.ok(Date.now() - started < 5000)
-  assert.deepEqual(listing, { backendId: "codex-acp", models: [], error: "model listing for codex-acp timed out after 1500 ms" })
+  assert.deepEqual(listing, { backendId: "codex-acp", models: [], error: "model listing for codex-acp timed out after 600 ms" })
   await cache.list("codex-acp")
   assert.equal(await listings(), 2)
 })
