@@ -36,7 +36,7 @@ Similarly, use `nvim-diff` for diff/compare requests and `nvim-lua` for arbitrar
 
 Binary: `~/bin/work`
 
-Also referenced by: `.claude/settings.local.json` (permission allowlist), `neovim/lua/sodium/plugins/agentic.lua` (work_bin variable).
+Also referenced by: `.claude/settings.local.json` (permission allowlist), `home/.config/nvim/lua/sodium/plugins/agentic.lua` (work_bin variable).
 
 ### Deployed agent files
 
@@ -44,5 +44,5 @@ Also referenced by: `.claude/settings.local.json` (permission allowlist), `neovi
 - `home/.claude/settings.json` — permissions, hooks, MCP servers
 - `home/.claude/agents/` — plan-reviewer, code-reviewer
 - `home/.claude/commands/` — note, name, archive-plans, etc.
-- `home/.claude/hooks/` — notify-on-stop.sh, session-project.sh
+- `home/.claude/hooks/` — notify-on-idle.sh, session-project.sh
 - `home/.agents/skills/` — canonical shared skills

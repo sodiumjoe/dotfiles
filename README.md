@@ -17,7 +17,7 @@ Bootstrap then installs Agency's build dependencies in every environment, builds
 The laptop's `remote` and `remotes` commands automatically enroll the selected devbox with Agency in the background. They run remote `agy status --json` with a 30-second deadline, then save only its SSH hostname and host ID locally. Both hosts need `agy` on the noninteractive SSH session's PATH. Successful enrollment is quiet and repeated connections are a no-op. Enrollment failures warn without delaying or blocking terminal attachment; identity conflicts preserve the existing record. Enrollment persists after disconnect, so the global Agency picker can query previously visited devboxes while they are running.
 
 Post-install:
-- `brew-sync` to install Homebrew packages (`brew.sh` is deprecated)
+- `brew-sync` to install Homebrew packages
 - `./macos` to apply macOS defaults
 - FileVault, caps-lock-to-ctrl, generate SSH keys, [rustup](https://www.rustup.rs/)
 
@@ -107,11 +107,11 @@ The repository sets its own `core.hooksPath=hooks`, because Stripe's global `cor
 
 ### Conditional Symlinks
 
-Claude settings are symlinked only for `work` and `home`. Codex instructions, Codex config, and work-cli are only symlinked when `DOTFILES_ENV` is `work` or `devbox`. Skills are deployed under `~/.agents/skills` in every environment, with individual Claude aliases under `~/.claude/skills`. Codex reads the shared skill directory directly.
+Claude settings are applied as the ordinary file `~/.claude/settings.json` in every environment. Codex instructions, Codex config, and work-cli are only symlinked when `DOTFILES_ENV` is `work` or `devbox`. Skills are deployed under `~/.agents/skills` in every environment, with individual Claude aliases under `~/.claude/skills`. Codex reads the shared skill directory directly.
 
 ### Runtime Config
 
-`home/.config/zsh/.zshrc` sources `work.zsh` or `home.zsh` from the same directory based on `$DOTFILES_ENV`. Neovim reads `$DOTFILES_ENV` for ACP provider selection (`codex-acp` at work, `claude-agent-acp` at home).
+`home/.config/zsh/.zshrc` sources `work.zsh` or `home.zsh` from the same directory based on `$DOTFILES_ENV`. Neovim does not read `$DOTFILES_ENV`: its only ACP provider is Agency, whose default backend is Claude Opus whenever Claude is enabled.
 
 ### Package Sync
 
@@ -158,11 +158,11 @@ Skills live in `home/.agents/skills/` and deploy to `~/.agents/skills/`. Claude 
 
 ### work-cli
 
-Location: `~/.dotfiles/work-cli/`; binary at `work-cli/bin/work`, symlinked to `~/bin/work`. Also referenced by `.claude/settings.local.json` (permission allowlist) and `neovim/lua/sodium/plugins/agentic.lua` (work_bin variable).
+Location: `~/.dotfiles/work-cli/`; binary at `work-cli/bin/work`, symlinked to `~/bin/work`. Also referenced by `.claude/settings.local.json` (permission allowlist) and `home/.config/nvim/lua/sodium/plugins/agentic.lua` (work_bin variable).
 
 Work vault: `~/stripe/work/` (configured in `home/.config/work/config.json`).
 
-Neovim keybindings: `<leader>ap` (pick task), `<leader>aP` (create project), `<leader>at` (add task).
+Neovim keybindings: `<leader>ap` (pick project file), `<leader>aP` (create project), `<leader>at` (add task), `<leader>st` (task state picker for the current project) and `<leader>sT` (task state picker across all projects).
 
 Code review workflow:
 - `work review enter-pr <n>` -- check out PR n for review and write session state under `.review/`
@@ -178,7 +178,7 @@ PR review recovery state lives in `.review/session.json`, which is written befor
 - `claude/settings-merge.jq` -- jq filter for merging base + overlay settings
 - `home/.claude/agents/` -- plan-reviewer, code-reviewer (Claude-only)
 - `home/.claude/commands/` -- note, name, archive-plans, etc. (Claude-only)
-- `home/.claude/hooks/` -- notify-on-idle.sh, notify-on-stop.sh, repro-stop-hook.sh, session-project.sh
+- `home/.claude/hooks/` -- notify-on-idle.sh, session-project.sh
 - `home/.codex/AGENTS.md` -- generated (do not edit directly)
 - `home/.codex/config.toml` -> `~/.codex/config.toml` (model, sandbox, MCP)
 - `claude/` and `codex/` -- template inputs for generated settings and config
