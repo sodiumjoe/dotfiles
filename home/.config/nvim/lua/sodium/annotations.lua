@@ -336,10 +336,11 @@ function M.edit(buf, first, last)
             20,
             math.min(60, vim.api.nvim_win_get_width(source_win) - vim.fn.getwininfo(source_win)[1].textoff - 2)
         ),
-        height = math.min(10, math.max(3, #lines)),
+        height = math.min(10, math.max(3, #lines)) + 1,
         style = "minimal",
         border = "rounded",
         title = " annotation ",
+        title_pos = "center",
     }
     local top = vim.fn.line("w0", source_win)
     if last + 1 < top or last + 1 > vim.fn.line("w$", source_win) then
@@ -347,6 +348,11 @@ function M.edit(buf, first, last)
         config.row = math.max(0, math.min(vim.api.nvim_win_get_height(source_win) - 1, last + 2 - top))
     end
     local win = vim.api.nvim_open_win(fbuf, true, config)
+    vim.wo[win][0].winbar = " "
+    vim.wo[win][0].statuscolumn = " "
+    vim.wo[win][0].winhighlight = "WinBar:NormalFloat,WinBarNC:NormalFloat"
+    vim.wo[win][0].wrap = true
+    vim.wo[win][0].linebreak = true
     local done = false
     local function close()
         vim.cmd("stopinsert")
@@ -394,7 +400,7 @@ function M.edit(buf, first, last)
         buffer = fbuf,
         callback = function()
             if vim.api.nvim_win_is_valid(win) then
-                vim.api.nvim_win_set_height(win, math.min(10, math.max(3, vim.api.nvim_buf_line_count(fbuf))))
+                vim.api.nvim_win_set_height(win, math.min(10, math.max(3, vim.api.nvim_buf_line_count(fbuf))) + 1)
             end
         end,
     })
