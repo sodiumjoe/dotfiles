@@ -10,6 +10,7 @@ local function highlights()
     vim.api.nvim_set_hl(0, "AgencyAnnotation", { default = true, fg = yellow, italic = true })
     vim.api.nvim_set_hl(0, "AgencyAnnotationBorder", { default = true, fg = yellow })
     vim.api.nvim_set_hl(0, "AgencyAnnotationSign", { default = true, fg = yellow })
+    vim.api.nvim_set_hl(0, "AgencyAnnotationStale", { default = true, link = "DiagnosticWarn" })
 end
 highlights()
 vim.api.nvim_create_autocmd(
@@ -44,25 +45,34 @@ local function valid(buf)
     return notes[buf] ~= nil
 end
 
-local function box(buf, first, text)
+local STALE = "annotated text changed on disk"
+
+local function box(buf, first, text, stale)
     local indent = (" "):rep(vim.api.nvim_buf_call(buf, function()
         return vim.fn.indent(first + 1)
     end))
     local body, width = vim.split(text, "\n"), 0
+    if stale then
+        table.insert(body, 1, STALE)
+    end
     for _, line in ipairs(body) do
         width = math.max(width, vim.fn.strdisplaywidth(line))
     end
     local rule = ("─"):rep(width + 2)
-    local lines = { { { indent }, { "╭" .. rule .. "╮", "AgencyAnnotationBorder" } } }
-    for _, line in ipairs(body) do
+    local border = stale and "AgencyAnnotationStale" or "AgencyAnnotationBorder"
+    local lines = { { { indent }, { "╭" .. rule .. "╮", border } } }
+    for index, line in ipairs(body) do
         lines[#lines + 1] = {
             { indent },
-            { "│ ", "AgencyAnnotationBorder" },
-            { line .. (" "):rep(width - vim.fn.strdisplaywidth(line)), "AgencyAnnotation" },
-            { " │", "AgencyAnnotationBorder" },
+            { "│ ", border },
+            {
+                line .. (" "):rep(width - vim.fn.strdisplaywidth(line)),
+                stale and index == 1 and "AgencyAnnotationStale" or "AgencyAnnotation",
+            },
+            { " │", border },
         }
     end
-    lines[#lines + 1] = { { indent }, { "╰" .. rule .. "╯", "AgencyAnnotationBorder" } }
+    lines[#lines + 1] = { { indent }, { "╰" .. rule .. "╯", border } }
     return lines
 end
 
@@ -75,8 +85,11 @@ local function render(buf)
     for mark, note in pairs(notes[buf]) do
         local first, last = range(buf, mark)
         if last then
+            if not note.stale then
+                note.lines = vim.api.nvim_buf_get_lines(buf, first, last + 1, false)
+            end
             rows[last] = rows[last] or {}
-            table.insert(rows[last], { first = first, seq = note.seq, text = note.text })
+            table.insert(rows[last], { first = first, seq = note.seq, text = note.text, stale = note.stale })
         end
     end
     icons[buf] = {}
@@ -90,11 +103,48 @@ local function render(buf)
         local lines, marks = {}, {}
         for _, item in ipairs(stack) do
             marks[#lines + 2] = true
-            vim.list_extend(lines, box(buf, item.first, item.text))
+            vim.list_extend(lines, box(buf, item.first, item.text, item.stale))
         end
         icons[buf][last] = marks
         vim.api.nvim_buf_set_extmark(buf, render_ns, last, 0, { virt_lines = lines })
     end
+end
+
+local function matches(lines, start, snapshot)
+    for index, line in ipairs(snapshot) do
+        if lines[start + index] ~= line then
+            return false
+        end
+    end
+    return true
+end
+
+local function reanchor(buf)
+    if not valid(buf) then
+        return
+    end
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local moves = {}
+    for mark, note in pairs(notes[buf]) do
+        local first = range(buf, mark)
+        if first and note.lines and not matches(lines, first, note.lines) then
+            local best
+            for start = 0, #lines - #note.lines do
+                if matches(lines, start, note.lines) and (not best or math.abs(start - first) < math.abs(best - first)) then
+                    best = start
+                end
+            end
+            if best then
+                moves[#moves + 1] = { mark = mark, first = best, last = best + #note.lines - 1, text = note.text }
+            else
+                note.stale = true
+            end
+        end
+    end
+    for _, move in ipairs(moves) do
+        M.set(buf, move.first, move.last, move.text, move.mark)
+    end
+    render(buf)
 end
 
 local function attach(buf)
@@ -110,6 +160,13 @@ local function attach(buf)
             if next(notes[buf] or {}) then
                 render(buf)
             end
+        end,
+    })
+    vim.api.nvim_create_autocmd("FileChangedShellPost", {
+        group = id,
+        buffer = buf,
+        callback = function()
+            reanchor(buf)
         end,
     })
     vim.api.nvim_create_autocmd({ "BufUnload", "BufWipeout" }, {
@@ -147,7 +204,8 @@ function M.set(buf, first, last, text, mark)
         end_right_gravity = false,
     })
     seq = seq + 1
-    notes[buf][mark] = { text = text, seq = seq }
+    local previous = notes[buf][mark]
+    notes[buf][mark] = { text = text, seq = seq, lines = previous and previous.lines }
     render(buf)
     return mark
 end
@@ -174,6 +232,9 @@ function M.list(only)
                 local first, last = range(buf, mark)
                 if first then
                     items[#items + 1] = { buf = buf, mark = mark, first = first, last = last, note = note.text }
+                    if note.stale then
+                        items[#items].stale = note.lines
+                    end
                 end
             end
         end
@@ -198,13 +259,35 @@ function M.annotations()
             "File: " .. (name == "" and "[buffer " .. item.buf .. "]" or vim.fn.fnamemodify(name, ":.")),
             ("Lines: %d-%d"):format(item.first + 1, item.last + 1),
         }
-        for _, line in ipairs(vim.api.nvim_buf_get_lines(item.buf, item.first, item.last + 1, false)) do
+        for _, line in ipairs(item.stale or vim.api.nvim_buf_get_lines(item.buf, item.first, item.last + 1, false)) do
             block[#block + 1] = "> " .. line
+        end
+        if item.stale then
+            block[#block + 1] = "Warning: the quoted lines were annotated before the file changed on disk; they are no longer at these lines."
         end
         block[#block + 1] = "Note: " .. item.note
         item.text = table.concat(block, "\n")
+        item.stale = nil
     end
     return items
+end
+
+function M.summary(items)
+    items = vim.tbl_filter(function(item)
+        return type(item.buf) == "number" and vim.api.nvim_buf_is_valid(item.buf) and item.first and item.last and item.note
+    end, items)
+    if #items == 0 then
+        return
+    end
+    local lines = { #items == 1 and "1 annotation" or #items .. " annotations" }
+    for _, item in ipairs(items) do
+        local name = vim.api.nvim_buf_get_name(item.buf)
+        local path = name == "" and "[buffer " .. item.buf .. "]" or vim.fn.fnamemodify(name, ":.")
+        local lines_label = item.first == item.last and tostring(item.first + 1) or ("%d-%d"):format(item.first + 1, item.last + 1)
+        local note = vim.split(item.note, "\n")[1]
+        lines[#lines + 1] = ("- %s:%s · %s"):format(path, lines_label, note)
+    end
+    return lines
 end
 
 function M.accept_annotations(captured)
@@ -403,13 +486,16 @@ function M.gutter(win, lnum, virtnum)
     if not marks or virtnum >= 0 then
         return
     end
-    local total = 0
+    local total, offset = 0, nil
     for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, -1, { lnum - 1, 0 }, { lnum - 1, -1 }, { details = true })) do
         if mark[4].virt_lines and not mark[4].virt_lines_above then
+            if mark[4].ns_id == render_ns then
+                offset = total
+            end
             total = total + #mark[4].virt_lines
         end
     end
-    if marks[total + virtnum + 1] then
+    if offset and marks[total + virtnum + 1 - offset] then
         return "%=%#AgencyAnnotationSign#" .. icon .. "%*"
     end
 end

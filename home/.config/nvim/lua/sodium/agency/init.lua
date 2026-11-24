@@ -350,6 +350,10 @@ function M.setup(deps)
                 callback({ state = "rejected", error = failure("NOT_READY") })
                 return false
             end
+            local summary = #annotations > 0 and require("sodium.annotations").summary(annotations)
+            if summary then
+                manager.message_writer:write_message(require("agentic.acp.acp_payloads").generate_user_message(summary))
+            end
             return true
         end
         local manager = local_manager(opts.session)

@@ -308,4 +308,61 @@ describe("Annotations", function()
         assert.same({ { 1, 0 }, { 3, 0 }, { 1, 0 } }, field("pos"))
         assert.same({ { 2, 0 }, { 3, 0 }, { 2, 0 } }, field("end_pos"))
     end)
+
+    describe("on a file reloaded from disk", function()
+        local path, buf
+        before_each(function()
+            path = vim.fn.tempname() .. ".txt"
+            vim.fn.writefile({ "alpha", "beta", "gamma" }, path)
+            vim.cmd("edit " .. vim.fn.fnameescape(path))
+            buf = vim.api.nvim_get_current_buf()
+            bufs[#bufs + 1] = buf
+            vim.bo[buf].autoread = true
+        end)
+        local function rewrite(lines)
+            vim.fn.writefile(lines, path)
+            local stat = vim.uv.fs_stat(path)
+            vim.uv.fs_utime(path, stat.atime.sec + 10, stat.mtime.sec + 10)
+            vim.cmd("checktime")
+        end
+
+        it("moves an annotation to where its text went", function()
+            local mark = annotations.set(buf, 1, 1, "about beta")
+            rewrite({ "new first", "alpha", "beta", "gamma" })
+            assert.same({ { buf = buf, mark = mark, first = 2, last = 2, note = "about beta" } }, annotations.list())
+            assert.is_falsy(annotations.annotations()[1].text:find("changed on disk", 1, true))
+        end)
+
+        it("marks an annotation stale when its text is gone and quotes the original", function()
+            annotations.set(buf, 1, 1, "about beta")
+            rewrite({ "alpha", "delta", "gamma" })
+            local text = annotations.annotations()[1].text
+            assert.is_truthy(text:find("> beta", 1, true))
+            assert.is_truthy(text:find("changed on disk", 1, true))
+        end)
+    end)
+
+    it("puts the gutter icon on the note's first line beside other virtual lines", function()
+        local buf = shown({ "one", "two", "three" })
+        local other = vim.api.nvim_create_namespace("annotations_spec_other")
+        vim.api.nvim_buf_set_extmark(buf, other, 1, 0, { virt_lines = { { { "OTHER 1" } }, { { "OTHER 2" } } } })
+        annotations.set(buf, 1, 1, "the note")
+        vim.cmd("redraw!")
+        local win = vim.api.nvim_get_current_win()
+        local total = 0
+        for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, -1, { 1, 0 }, { 1, -1 }, { details = true })) do
+            if mark[4].virt_lines then total = total + #mark[4].virt_lines end
+        end
+        local row = vim.fn.screenpos(win, 2, 1).row
+        local hits = 0
+        for k = 1, total do
+            local text = ""
+            for col = 1, vim.o.columns do text = text .. vim.fn.screenstring(row + k, col) end
+            local marked = annotations.gutter(win, 2, k - total - 1) ~= nil
+            assert.are.equal(text:find("│ the note", 1, true) ~= nil, marked)
+            if marked then hits = hits + 1 end
+        end
+        assert.are.equal(1, hits)
+        vim.api.nvim_buf_clear_namespace(buf, other, 0, -1)
+    end)
 end)
