@@ -55,6 +55,7 @@ export type HandlerOptions = {
   gate: Duplex
   onPhase?: (phase: HandlerStatus["phase"]) => Promise<void>
   liveDependencies?: LiveCoreDependencies
+  warmModels?: boolean
   launchContracts?: readonly LaunchContract[]
   entryDriver?: RuntimeEntryDriver
   distDigest?: string | null
@@ -237,7 +238,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (await agentIndex.migrated()) void migrate()
     else await migrate()
     checkStartup()
-    core = createLiveCore({ context: launchContext, contracts: options.launchContracts ?? productionLaunchContracts(), index: agentIndex, homes: defaultHomes(), events }, options.liveDependencies)
+    core = createLiveCore({ context: launchContext, contracts: options.launchContracts ?? productionLaunchContracts(), index: agentIndex, homes: defaultHomes(), events }, { ...options.liveDependencies, ...(options.warmModels ? { warmModels: true } : {}) })
     await core.initialize()
     await core.loadHandoff()
     checkStartup()

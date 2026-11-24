@@ -21,7 +21,7 @@ if (process.argv[2] === "internal-runtime-bridge") {
     const { runHandler } = await import("./handler/daemon.js")
     const { macNotify } = await import("./hosts/attention.js")
     const env = await productionEnvironment()
-    await runHandler({ ...env, distDigest, ...(process.platform === "darwin" ? { attentionNotify: macNotify } : {}), recordPath: process.env.AGENCY_HANDLER_RECORD, generation: process.env.AGENCY_HANDLER_GENERATION, status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }) })
+    await runHandler({ ...env, distDigest, warmModels: true, ...(process.platform === "darwin" ? { attentionNotify: macNotify } : {}), recordPath: process.env.AGENCY_HANDLER_RECORD, generation: process.env.AGENCY_HANDLER_GENERATION, status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }) })
   } catch (error) { process.stderr.write(String(error).slice(0, 2048) + "\n"); process.exitCode = 70 }
 } else if (process.argv[2] === "acp") {
   const { runAcpEndpoint } = await import("./acp/endpoint.js")

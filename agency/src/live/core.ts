@@ -35,7 +35,7 @@ export type PromptResult = { state: "prompt"; agentId: string; submissionId: str
 export type LiveObservation = ConversationObservation & { native: ProviderSession; backendId: ProviderId }
 export type LiveCoreInput = { context: LiveContext; contracts: readonly LaunchContract[]; index: AgentIndex; homes: SessionHomes; events?: EventLog }
 export type HandoffStatus = { fromGeneration: string; agents: string[]; pending: string[]; failed: Array<{ agentId: string } & RequestFailure> }
-export type LiveCoreDependencies = { processFactory?: typeof createAgentProcess; modelSource?: ModelSource }
+export type LiveCoreDependencies = { processFactory?: typeof createAgentProcess; modelSource?: ModelSource; warmModels?: boolean }
 export type LiveCore = {
   readonly handlerGeneration: string
   readonly permissions: PermissionArbiter
@@ -306,7 +306,10 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     handlerGeneration: generation, permissions, start, launch,
     touch: () => table.touch(),
     liveAgents: () => table.all(),
-    async initialize() { void roster.rows(table).catch(() => undefined) },
+    async initialize() {
+      void roster.rows(table).catch(() => undefined)
+      if (dependencies.warmModels) void enabled().then(({ backends }) => Promise.all(backends.map(({ backend }) => models.list(backend.id)))).catch(() => undefined)
+    },
     async restore(agentId, environment, nativeParams) { return row(await revive(agentId, environment, nativeParams)) },
     async stop(agentId) {
       const agent = table.get(id(agentId))
