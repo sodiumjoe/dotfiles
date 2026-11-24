@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import hashlib
 import json
+import platform
 import os
 import pathlib
 import shutil
@@ -161,6 +162,17 @@ process.stdout.write(JSON.stringify({ defaultBackendId: config.defaultBackendId 
             "name": "@agentclientprotocol/codex-acp", "version": "2.6.0", "main": "index.js",
         }))
         (self.adapter / "index.js").write_text('throw new Error("provider execution is forbidden in bootstrap tests")')
+        modules = self.repo / "node-bin/node_modules"
+        arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x64"}[platform.machine()]
+        claude = self.claude_executable = modules / f"@anthropic-ai/claude-agent-sdk-{sys.platform}-{arch}/claude"
+        claude.parent.mkdir(parents=True)
+        claude.write_text("#!/bin/sh\necho 'provider execution is forbidden in bootstrap tests' >&2\nexit 1\n")
+        claude.chmod(0o755)
+        self.claude_adapter = modules / "@agentclientprotocol/claude-agent-acp"
+        for package, version in (("@agentclientprotocol/claude-agent-acp", "0.102.0"), ("@anthropic-ai/claude-agent-sdk", "0.3.321")):
+            (modules / package).mkdir(parents=True)
+            (modules / package / "package.json").write_text(json.dumps({"name": package, "version": version, "main": "index.js"}))
+            (modules / package / "index.js").write_text('throw new Error("provider execution is forbidden in bootstrap tests")')
 
     def tearDown(self):
         if hasattr(self, "runtime") and self.runtime.exists():
@@ -262,7 +274,7 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
 
     def test_runtime_declares_missing_adapter_and_validation_rejects_it(self):
         self.prepare_host_state()
-        shutil.rmtree(self.adapter)
+        shutil.rmtree(self.claude_adapter)
         result = self.read_runtime()
         self.assert_default_profiles(result["profiles"])
         checked = self.run_provider_check()
@@ -378,8 +390,8 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
                 self.assertEqual(self.profile_path.read_text(), content)
                 self.assertEqual(self.profile_path.stat().st_mode & 0o777, mode)
 
-    def test_missing_or_nonexecutable_wrapper_does_not_publish_profile(self):
-        wrapper = self.home_tree / "bin/acp-codex"
+    def test_missing_or_nonexecutable_default_executable_does_not_publish_profile(self):
+        wrapper = self.claude_executable
         wrapper.chmod(0o600)
         self.assert_setup_failed()
         self.assertFalse(self.profile_path.exists())
@@ -387,8 +399,8 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
         self.assert_setup_failed()
         self.assertFalse(self.profile_path.exists())
 
-    def test_missing_or_unsupported_adapter_does_not_publish_profile(self):
-        metadata = self.adapter / "package.json"
+    def test_missing_or_unsupported_default_adapter_does_not_publish_profile(self):
+        metadata = self.claude_adapter / "package.json"
         for version in ["2.0.0", None]:
             with self.subTest(version=version):
                 if version is None:
