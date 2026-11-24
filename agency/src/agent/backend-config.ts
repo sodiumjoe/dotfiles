@@ -49,10 +49,10 @@ export async function readBackendConfig(root: string): Promise<BackendConfig> {
   const backends: Backend[] = staticProductionContracts().filter(contract => enabled.has(contract.providerId)).map(contract => ({
     id: contract.providerId, args: [], compatibilityId: contract.id,
     environmentDefaults: contract.providerId === "codex-acp" ? { INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" } : {},
-    initial: contract.providerId === "codex-acp" ? { modeId: "agent-full-access" } : {},
+    initial: contract.providerId === "codex-acp" ? { modeId: "agent-full-access" } : { modelId: "opus" },
   }))
   if (!backends.length) throw new AgentError("UNAVAILABLE", undefined, "no enabled provider in " + join(catalog, "providers.json") + " has a backend this Agency build supports")
-  return { version: 1, defaultBackendId: backends[0]!.id, backends }
+  return { version: 1, defaultBackendId: (backends.find(backend => backend.id === "claude-agent-acp") ?? backends[0]!).id, backends }
 }
 
 export function backendFingerprint(backend: Backend, manifest: unknown): string {

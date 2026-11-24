@@ -31,16 +31,16 @@ async function fixture(t: test.TestContext) {
   return { root, profile, profiles }
 }
 
-test("default installations expose Claude alongside the default Codex backend", async t => {
+test("default installations make Claude Opus the default backend alongside Codex", async t => {
   const { root } = await fixture(t)
   const profiles = await readProfiles(root)
   assert.deepEqual(profiles.map(profile => profile.id), ["codex-acp", "claude-agent-acp"])
   assert.ok(profiles[1]!.executable.includes("/@anthropic-ai/claude-agent-sdk-"))
   assert.equal(await realpath(profiles[1]!.executable), profiles[1]!.executable)
   const config = await readBackendConfig(root)
-  assert.equal(config.defaultBackendId, "codex-acp")
+  assert.equal(config.defaultBackendId, "claude-agent-acp")
   assert.deepEqual(config.backends.map(backend => backend.id), ["codex-acp", "claude-agent-acp"])
-  assert.deepEqual(config.backends[1]!.initial, {})
+  assert.deepEqual(config.backends[1]!.initial, { modelId: "opus" })
 })
 
 test("Claude-only provider overrides select Claude without changing disabled or empty overrides", async t => {

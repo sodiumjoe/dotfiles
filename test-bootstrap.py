@@ -237,7 +237,7 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
         self.prepare_host_state()
         result = self.read_runtime()
         self.assert_default_profiles(result["profiles"])
-        self.assertEqual(result["backends"]["defaultBackendId"], "codex-acp")
+        self.assertEqual(result["backends"]["defaultBackendId"], "claude-agent-acp")
         self.assertEqual(result["backends"]["backends"][0]["environmentDefaults"], {
             "INITIAL_AGENT_MODE": "agent-full-access", "MODEL_PROVIDER": "litellm",
         })
