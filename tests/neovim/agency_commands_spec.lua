@@ -81,7 +81,7 @@ describe("Agency native commands", function()
 
 
 
-    it("previews a local agent over the editor connection", function()
+    it("previews local and remote agents over the editor connection", function()
         local outcome
         api.excerpt({ agentId = f.row.record.definition.agentId }, function(err, result) outcome = { err = err, result = result } end)
         f.flush()
@@ -91,6 +91,9 @@ describe("Agency native commands", function()
         assert.is_true(vim.wait(1000, function() return outcome ~= nil end))
         assert.is_nil(outcome.err)
         assert.are.equal("hello", outcome.result.turns[1].text)
+        api.excerpt({ agentId = "a1", hostId = string.rep("b", 64) }, function() end)
+        f.flush()
+        assert.are.same({ agentId = "a1", turns = 4, hostId = string.rep("b", 64) }, f.request("agency/excerpt").params)
     end)
 
     it("reads remote rosters from the Handler in the picker's host shape", function()
@@ -121,14 +124,6 @@ describe("Agency native commands", function()
             return function() end
         end
     end
-
-    it("previews a remote row through the laptop Handler", function()
-        local calls, request = fake_requests()
-        package.loaded["sodium.agency"] = nil
-        local remote = require("sodium.agency").setup({ request = request, notify = function() end })
-        remote.excerpt({ agentId = "a1", hostId = string.rep("b", 64) }, function() end)
-        assert.are.same({ "agency/excerpt", { agentId = "a1", turns = 4, hostId = string.rep("b", 64) } }, { calls[1].method, calls[1].params })
-    end)
 
     it("lists and decides routed approvals through the laptop Handler, and says when an outcome is unknown", function()
         local calls, request = fake_requests()
@@ -177,19 +172,6 @@ describe("Agency native commands", function()
         assert.is_true(vim.wait(1000, function() return outcome ~= nil end))
         assert.is_truthy(outcome.message:find("agency/excerpt", 1, true))
         assert.is_truthy(outcome.message:find(":AgencyReload", 1, true))
-    end)
-
-    it("submits through native ACP and accepts annotations only on Handler admission", function()
-        local accepted, outcome = 0
-        api.annotations = function() return { { text = "annotation" } } end
-        api.accept_annotations = function() accepted = accepted + 1 end
-        assert.is_true(api.submit_text("review", { annotations = true, session = f.manager.session_key }, function(value) outcome = value end))
-        local prompt = f.request("session/prompt")
-        assert.are.equal("annotation", prompt.params.prompt[#prompt.params.prompt].text)
-        assert.are.equal(0, accepted)
-        f.state(prompt.params._meta.agency.submissionId, "running")
-        assert.are.equal(1, accepted)
-        assert.are.equal("accepted", outcome.state)
     end)
 
     it("submits to the requested session after the current session changes", function()

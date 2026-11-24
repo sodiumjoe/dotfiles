@@ -5,6 +5,12 @@ local sessions = require("sodium.agentic_sessions")
 describe("Saved conversation picker", function()
     local columns, lines, provider, notify, select_ui, notifications
 
+    local function drain()
+        local done = false
+        vim.schedule(function() done = true end)
+        assert.is_true(vim.wait(1000, function() return done end, 5))
+    end
+
     before_each(function()
         columns, lines = vim.o.columns, vim.o.lines
         vim.o.columns, vim.o.lines = 180, 50
@@ -16,9 +22,9 @@ describe("Saved conversation picker", function()
     end)
     after_each(function()
         for _, picker in ipairs(Snacks.picker.get()) do picker:close() end
-        vim.wait(50, function() return false end)
+        drain()
         vim.o.columns, vim.o.lines = columns, lines
-        vim.wait(30, function() return false end)
+        drain()
         require("agentic.config").acp_providers.agency = provider
         vim.notify, vim.ui.select = notify, select_ui
     end)
@@ -96,7 +102,7 @@ describe("Saved conversation picker", function()
         picker:close()
         local title, count = picker.title, picker.list:count()
         answer(state, { stopped("late") })
-        vim.wait(50, function() return false end)
+        drain()
         assert.is_true(picker.closed)
         assert.are.equal(title, picker.title)
         assert.are.equal(count, picker.list:count())

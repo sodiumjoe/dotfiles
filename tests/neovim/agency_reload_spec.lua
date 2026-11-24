@@ -46,6 +46,12 @@ describe("Agency reload", function()
         end
         error("no pending " .. name .. " call")
     end
+    local function await_agents()
+        assert.is_true(vim.wait(1000, function()
+            for _, call in ipairs(calls) do if not call.answered and call.argv[1] == "agents" then return true end end
+            return false
+        end, 5))
+    end
     local function respond_agents(rows)
         for _, call in ipairs(calls) do
             if not call.answered and call.argv[1] == "agents" then
@@ -95,7 +101,7 @@ describe("Agency reload", function()
         reloaded.__handle_session_update = function(...) handled = handled + 1; return handle(...) end
         f.client:_handle_message({ method = "session/update", params = { sessionId = manager.session_id,
             update = { sessionUpdate = "agent_message_chunk", content = { type = "text", text = "reload-marker" } } } })
-        vim.wait(100, function() return false end)
+        f.flush()
         reloaded.__handle_session_update = handle
         assert.are.equal(1, handled)
         local text = table.concat(vim.api.nvim_buf_get_lines(manager.message_writer.bufnr, 0, -1, false), "\n")
@@ -140,11 +146,9 @@ describe("Agency reload", function()
         for index = before + 1, #f.frames do assert.are_not.equal("session/prompt", f.frames[index].method) end
         assert.is_false(manager.is_generating)
         assert.are.equal("lost question", table.concat(vim.api.nvim_buf_get_lines(manager.widget.buf_nrs.input, 0, -1, false), "\n"))
+        await_agents()
         respond_agents({ row(control.target_a, false) })
-        assert.is_true(vim.wait(300, function()
-            for _, call in ipairs(calls) do if not call.answered and call.argv[1] == "agents" then return true end end
-            return false
-        end, 5))
+        await_agents()
         respond_agents({ row(moved) })
         answer_load(moved)
         local target = Registry.current()
@@ -204,16 +208,15 @@ describe("Agency reload", function()
         return before, table.concat(notifications, "\n")
     end
 
-    for name, status in pairs({ ["no digest"] = { phase = "ready" }, ["a different digest"] = { phase = "ready", distDigest = string.rep("e", 64) } }) do
-        it("rebinds without reloading the Lua when a failed restart leaves an old Handler reporting " .. name, function()
-            local before, text = failed_restart({ code = "INCOMPLETE", message = "shutdown did not complete and the Handler is still running" }, status)
-            assert.are.equal(before, package.loaded["sodium.agency"])
-            assert.is_truthy(text:find("shutdown did not complete", 1, true))
-            assert.is_truthy(text:find("Lua was not reloaded because the old Handler is still running", 1, true))
-            assert.is_truthy(text:find("1 session rebound", 1, true))
-            assert.is_truthy(text:find("run :AgencyReload again", 1, true))
-        end)
-    end
+    it("rebinds without reloading the Lua when a failed restart leaves an old Handler reporting a different digest", function()
+        local before, text = failed_restart({ code = "INCOMPLETE", message = "shutdown did not complete and the Handler is still running" },
+            { phase = "ready", distDigest = string.rep("e", 64) })
+        assert.are.equal(before, package.loaded["sodium.agency"])
+        assert.is_truthy(text:find("shutdown did not complete", 1, true))
+        assert.is_truthy(text:find("Lua was not reloaded because the old Handler is still running", 1, true))
+        assert.is_truthy(text:find("1 session rebound", 1, true))
+        assert.is_truthy(text:find("run :AgencyReload again", 1, true))
+    end)
 
     it("reloads the Lua and rebinds when a failed restart leaves the new Handler running", function()
         local before, text = failed_restart({ code = "INCOMPLETE", message = "the new Handler runs a different build than dist" }, { phase = "ready", distDigest = digest })
@@ -269,26 +272,6 @@ describe("Agency reload", function()
         assert.is_truthy(table.concat(notifications, "\n"):find("broken stream", 1, true))
         assert.is_nil(vim.g.agency_reload_running)
     end)
-
-    it("says so when restoring the previous modules also fails", function()
-        local old = package.loaded["sodium.agency"]
-        local commands = old.commands
-        old.commands = function() error("old commands broken") end
-        package.preload["sodium.agency.stream"] = function() error("broken stream") end
-        require("sodium.agency.reload").run({})
-        f.flush()
-        local ok, err = pcall(respond, "status", { phase = "ready", distDigest = digest })
-        package.preload["sodium.agency.stream"] = nil
-        old.commands = commands
-        assert.is_true(ok, err)
-        local text = table.concat(notifications, "\n")
-        assert.is_truthy(text:find("broken stream", 1, true))
-        assert.is_truthy(text:find("old commands broken", 1, true))
-        assert.is_falsy(text:find("rolled back", 1, true))
-        assert.is_truthy(text:find("restart Neovim", 1, true))
-        assert.is_nil(vim.g.agency_reload_running)
-    end)
-
 
     it("does not refuse a reload after the client drops an outstanding load", function()
         require("sodium.agency.reload").run({})

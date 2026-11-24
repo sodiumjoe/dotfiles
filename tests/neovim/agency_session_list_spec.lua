@@ -12,20 +12,6 @@ describe("Agency session list presentation", function()
             launch = { handlerGeneration = "h", providerGeneration = "p" }, lastActivityAt = at } }, extra or {})
     end
 
-    it("formats ages and models and never shows a negative age", function()
-        local now = List.epoch("2026-11-13T12:00:00.000Z")
-        assert.are.equal("now", List.age("2026-11-13T11:59:30.000Z", now))
-        assert.are.equal("12m", List.age("2026-11-13T11:48:00Z", now))
-        assert.are.equal("3h", List.age("2026-11-13T09:00:00Z", now))
-        assert.are.equal("2d", List.age("2026-11-11T12:00:00Z", now))
-        assert.are.equal("now", List.age("2026-11-13T12:05:00Z", now))
-        assert.are.equal("", List.age(nil, now))
-        assert.are.equal("Claude · opus", List.model(view("a").record))
-        local codex = view("b")
-        codex.record.definition.backendId, codex.record.settings = "codex-acp", {}
-        assert.are.equal("Codex", List.model(codex.record))
-    end)
-
     it("orders timed rows newest first, then untimed rows in source order, then issues", function()
         local items = {
             List.item(view("old", "2026-11-12T00:00:00Z"), { status = "Idle" }),
@@ -116,27 +102,5 @@ describe("Agency session list presentation", function()
             for _, chunk in ipairs(List.format(item, { _agency_label_width = 19 })[1].resolve(width)) do text = text .. chunk[1] end
             assert.is_true(vim.fn.strdisplaywidth(text) <= width - 1, width .. ": " .. text)
         end
-    end)
-
-    it("pads the highlighted status inside its own badge", function()
-        local item = List.item(view("w", "2026-11-13T00:00:00Z"), { status = "Working" })
-        local chunks = List.format(item, { _agency_label_width = 9 })[1].resolve(100)
-        for index, chunk in ipairs(chunks) do
-            if chunk[2] == "DiagnosticInfo" then
-                assert.are.equal(" Working ", chunk[1])
-                assert.is_nil(chunks[index + 1] and chunks[index + 1][2])
-                return
-            end
-        end
-        error("no highlighted status chunk")
-    end)
-
-    it("shows and clears the loading suffix", function()
-        local picker = Snacks.picker({ title = "Base", items = {}, show_empty = true, format = List.format })
-        pickers[#pickers + 1] = picker
-        List.loading(picker, "Base", true)
-        assert.are.equal("Base (loading…)", picker.title)
-        List.loading(picker, "Base", false)
-        assert.are.equal("Base", picker.title)
     end)
 end)

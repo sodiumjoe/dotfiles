@@ -16,7 +16,24 @@ function M.new()
     row.record.definition.cwd = vim.fn.getcwd()
     vim.api.nvim_win_set_buf(0, vim.api.nvim_create_buf(true, true))
     local key = require("sodium.agency").open(row).session_key
-    local function flush() vim.wait(30, function() return false end) end
+    local function batching()
+        for _, manager in pairs(Registry.sessions) do
+            if manager._agency_stream then return true end
+        end
+        return false
+    end
+    local function flush()
+        local drained
+        assert(vim.wait(1000, function()
+            if drained == nil then
+                drained = false
+                vim.schedule(function() drained = true end)
+            end
+            if not drained then return false end
+            if batching() then drained = nil; return false end
+            return true
+        end, 5), "Agency events did not settle")
+    end
     local function request(method)
         for i = #frames, 1, -1 do if frames[i].method == method then return frames[i] end end
         error("missing " .. method)

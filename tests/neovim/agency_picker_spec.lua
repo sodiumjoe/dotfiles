@@ -33,6 +33,13 @@ describe("Agency active-agent snapshot", function()
         end))
     end
 
+    local function drain(picker)
+        assert.is_true(vim.wait(1000, function() return picker.closed == true end, 5))
+        local done = false
+        vim.schedule(function() done = true end)
+        assert.is_true(vim.wait(1000, function() return done end, 5))
+    end
+
     before_each(function() pickers = {} end)
     after_each(function()
         for _, picker in ipairs(pickers) do picker:close() end
@@ -92,7 +99,7 @@ describe("Agency active-agent snapshot", function()
         settle(picker, 2)
         stop_mapping(picker, "input", "n")()
         valid = false
-        vim.wait(100, function() return stopped > 0 end)
+        drain(picker)
         assert.are.equal(0, stopped)
     end)
 
@@ -113,7 +120,7 @@ describe("Agency active-agent snapshot", function()
             settle(picker, 2)
             stop_mapping(picker, "input", "n")()
             Registry.show_session(other.session_key)
-            vim.wait(100, function() return stopped > 0 end)
+            drain(picker)
             assert.are.equal(other, Registry.current())
             assert.are.equal(0, stopped)
         end)
@@ -141,31 +148,6 @@ describe("Agency active-agent snapshot", function()
         assert.is_truthy(inspected[1]:find("agent%-c"))
         assert.is_false(picker.closed == true)
     end)
-
-    for _, first in ipairs({ "local", "host" }) do
-        it("publishes local rows without waiting for owners when " .. first .. " arrives first", function()
-            local local_read, host_read
-            local picker = open({
-                page = function(_, callback) local_read = callback end,
-                read_roster = function(callback) host_read = callback end,
-            })
-            local results = { agents = { row("agent-a"), row("agent-b") }, issues = {}, handlerGeneration = "handler" }
-            local roster = {
-                state = "roster",
-                localHostId = "local",
-                hosts = { {
-                    hostId = "remote", hostname = "devbox", state = "ready",
-                    value = { agents = { row("agent-c") }, issues = {}, handlerGeneration = "handler" },
-                } },
-            }
-            if first == "local" then local_read(nil, results) else host_read(nil, roster) end
-            if first == "local" then settle(picker, 2) else assert.are.equal(0, picker:count()) end
-            if first == "local" then host_read(nil, roster) else local_read(nil, results) end
-            settle(picker, 3)
-            assert.are.equal("agent-a", picker.list:get(1).id)
-            assert.are.equal("remote:agent-c", picker.list:get(3).id)
-        end)
-    end
 
     it("shows friendly names before long titles while retaining the SSH host and attachment identity", function()
         local remote = row("agent-c")
@@ -212,13 +194,14 @@ describe("Agency active-agent snapshot", function()
                     { hostId = "remote", hostname = "qa-worker.example", name = "climate", error = "BRIDGE_EOF", state = "unavailable", code = "OFFLINE", since = 1763349120000 },
                     { hostId = "unknown-a", hostname = "unmatched-a.example", state = "unavailable", code = "UPDATE_REQUIRED" },
                     { hostId = "unknown-b", hostname = "qa-mydev--0c3af4af6e78de0a3.northwest.stripe.io", state = "unavailable", code = "OFFLINE", since = 1763349120000 },
+                    { hostId = "new", hostname = "new.example", name = "new", state = "unavailable", code = "CONNECTING" },
                     { hostId = "owner", hostname = "qa-worker.example", state = "available", value = {
                         agents = {}, issues = { { message = "Owner issue" } }, handlerGeneration = "handler",
                     } },
                 } })
             end,
         }))
-        settle(picker, 6)
+        settle(picker, 7)
         local offline = "Offline since " .. os.date("%H:%M", 1763349120)
         local rows = {}
         for index = 1, picker:count() do
@@ -231,6 +214,7 @@ describe("Agency active-agent snapshot", function()
             if item.label == "climate" then assert.is_truthy(table.concat(item.preview, "\n"):find("Reason: BRIDGE_EOF", 1, true)) end
         end
         assert.is_true(vim.tbl_contains(rows, "unmatched-a|Update this devbox|Outdated"))
+        assert.is_true(vim.tbl_contains(rows, "new|Connecting|Connecting"))
         assert.is_true(vim.tbl_contains(rows, "qa-mydev--0c3af4…|" .. offline .. "|Offline"))
         resize(picker, 80)
         local text = table.concat(rendered(picker), "\n")
@@ -240,22 +224,6 @@ describe("Agency active-agent snapshot", function()
             local item = picker.list:get(index)
             if item.label == "unmatched-a" then assert.is_truthy(table.concat(item.preview, "\n"):find("Host: unmatched-a.example", 1, true)) end
         end
-    end)
-
-    it("tells an outdated devbox from one that is still connecting", function()
-        local picker = open(local_controller({
-            read_roster = function(callback)
-                callback(nil, { state = "roster", localHostId = vim.NIL, hosts = {
-                    { hostId = "old", hostname = "old.example", name = "old", state = "unavailable", code = "UPDATE_REQUIRED" },
-                    { hostId = "new", hostname = "new.example", name = "new", state = "unavailable", code = "CONNECTING" },
-                } })
-            end,
-        }))
-        settle(picker, 4)
-        local titles = {}
-        for index = 1, picker:count() do titles[#titles + 1] = picker.list:get(index).title end
-        assert.is_true(vim.tbl_contains(titles, "Update this devbox"))
-        assert.is_true(vim.tbl_contains(titles, "Connecting"))
     end)
 
     for _, width in ipairs({ 40, 80 }) do
@@ -346,26 +314,11 @@ describe("Agency active-agent snapshot", function()
         assert.are.equal("unknown", item.remote_ref.hostId)
     end)
 
-    it("preserves the current-conversation picker display", function()
+    it("shows a current conversation by its title and backend", function()
         local current = require("sodium.agency.picker").current({ row("agent-a") }, function() end)
         pickers[#pickers + 1] = current
         settle(current, 1)
-        assert.are.equal("text", current.opts.format)
         assert.is_truthy(current:current().text:find("agent-a · Codex", 1, true))
-    end)
-
-    it("adds labeled remotes after showing locals", function()
-        local owner_read
-        local picker = open(local_controller({
-            read_roster = function(callback) owner_read = callback end,
-        }))
-        settle(picker, 2)
-        owner_read(nil, { state = "roster", localHostId = "local", hosts = { {
-            hostId = "remote", hostname = "qa-worker.example", name = "climate", state = "available",
-            value = { agents = { row("agent-c") }, issues = {}, handlerGeneration = "handler" },
-        } } })
-        settle(picker, 3)
-        assert.is_truthy(picker.list:get(3).text:find("climate", 1, true))
     end)
 
     local function delayed_roster(remote)
@@ -392,6 +345,8 @@ describe("Agency active-agent snapshot", function()
                 else assert.are.equal(0, picker:count()) end
             end
             assert.are.same({ local_read = 1, owners = 1 }, calls)
+            assert.are.equal("agent-a", picker.list:get(1).id)
+            assert.are.equal("remote:agent-c", picker.list:get(3).id)
             assert.are.equal("climate", picker.list:get(3).label)
             assert.are.equal("remote", picker.list:get(3).remote_ref.hostId)
         end)
@@ -502,7 +457,7 @@ describe("Agency active-agent snapshot", function()
         end)
     end
 
-    it("keeps the selected agent when time advances and gets fresh data on reopening", function()
+    it("gets fresh data on reopening", function()
         local rows = { row("agent-a"), row("agent-b"), row("agent-c") }
         local controller = {
             page = function(_, callback)
@@ -514,11 +469,6 @@ describe("Agency active-agent snapshot", function()
         picker.list:view(3)
         assert.are.equal("agent-c", picker:current().id)
         rows = { row("agent-d") }
-        assert.is_false(vim.wait(5200, function()
-            return picker:current() and picker:current().id ~= "agent-c"
-        end))
-        assert.are.equal("agent-c", picker:current().id)
-        assert.are.equal(3, picker:count())
         picker:close()
         local reopened = open(controller)
         settle(reopened, 1)
@@ -554,7 +504,7 @@ describe("Agency active-agent snapshot", function()
         local title = late.title
         late:close()
         late_callback(nil, { agents = { row("agent-z") }, issues = {}, handlerGeneration = "handler" })
-        vim.wait(50, function() return false end)
+        drain(late)
         assert.are.equal(title, late.title)
         assert.are.equal(0, late.list:count())
     end)

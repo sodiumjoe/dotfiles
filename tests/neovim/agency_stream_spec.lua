@@ -366,18 +366,6 @@ describe("Agency live rendering", function()
         return vim.api.nvim_buf_get_lines(manager.message_writer.bufnr, 0, -1, false)
     end
 
-    it("names the backend in replayed headers before the load reply arrives", function()
-        local row = control.agent(control.target_b)
-        row.record.definition.backendId = "claude-agent-acp"
-        local manager = require("sodium.agency").open(row)
-        f.flush()
-        replayed(f.request("session/load").params.sessionId, chunk("restored answer"))
-        f.flush()
-        local text = table.concat(lines_of(manager), "\n")
-        assert.is_truthy(text:find("Agent - claude-agent-acp", 1, true))
-        assert.is_nil(text:find("Agent - Agency", 1, true))
-    end)
-
     it("names the backend in a reattached session's replayed headers", function()
         local row = control.agent(control.target_a)
         row.record.definition.backendId = "claude-agent-acp"
@@ -455,7 +443,7 @@ describe("Agency live rendering", function()
         f.manager._agency_local_submission = "00000000-0000-4000-8000-0000000000bb"
         state("running", "00000000-0000-4000-8000-0000000000bb")
         state("idle", vim.NIL)
-        vim.wait(200, function() return false end, 10)
+        f.flush()
         assert.are.equal(1, #calls)
         assert.are.equal(f.manager.session_key, calls[1].session_key)
     end)

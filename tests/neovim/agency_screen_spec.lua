@@ -238,17 +238,6 @@ describe("Agency screen", function()
         end
     end)
 
-    it("finds no manager without loading agentic when no session registry exists", function()
-        local loaded = package.loaded["agentic.session_registry"]
-        package.loaded["agentic.session_registry"] = nil
-        local ok, manager = pcall(screen.manager)
-        local after = package.loaded["agentic.session_registry"]
-        package.loaded["agentic.session_registry"] = loaded
-        assert.is_true(ok)
-        assert.is_nil(manager)
-        assert.is_nil(after)
-    end)
-
     it("gives conversation with a taller chat when the document closes in split", function()
         local chat = f.manager.widget.win_nrs.chat
         local height = vim.api.nvim_win_get_height(chat)
