@@ -716,6 +716,7 @@ exec agy acp]] } } }
         utils.augroup("AgenticResize", { clear = true })("VimResized", {
             callback = function()
                 require("sodium.agency.screen").resize()
+                require("sodium.agency.screen").fill()
             end,
         })
 

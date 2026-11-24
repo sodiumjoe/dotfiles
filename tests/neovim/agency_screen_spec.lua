@@ -50,6 +50,33 @@ describe("Agency screen", function()
         end
     end)
 
+    it("fills the chat when the editor grows taller", function()
+        local text = {}
+        for i = 1, 200 do text[#text + 1] = "line " .. i end
+        f.client:_handle_message({ method = "session/update", params = { sessionId = f.manager.session_id,
+            update = { sessionUpdate = "agent_message_chunk", content = { type = "text", text = table.concat(text, "\n") } } } })
+        f.flush()
+        screen.conversation(f.manager)
+        f.flush()
+        local win = f.manager.widget.win_nrs.chat
+        local count = vim.api.nvim_buf_line_count(f.manager.message_writer.bufnr)
+        for _, cursor in ipairs({ count, count - 3 }) do
+            vim.o.lines = 40
+            vim.api.nvim_exec_autocmds("VimResized", {})
+            f.flush()
+            vim.api.nvim_win_call(win, function() vim.cmd("normal! Gzb") end)
+            vim.api.nvim_win_set_cursor(win, { cursor, 0 })
+            vim.o.lines = 70
+            vim.api.nvim_exec_autocmds("VimResized", {})
+            f.flush()
+            vim.cmd("redraw")
+            assert.are.equal(cursor, vim.api.nvim_win_get_cursor(win)[1])
+            assert.are.equal(count, vim.fn.line("w$", win))
+            assert.are.equal(vim.api.nvim_win_get_height(win),
+                vim.api.nvim_win_text_height(win, { start_row = vim.fn.line("w0", win) - 1 }).all)
+        end
+    end)
+
     it("derives conversation, split, document and none from the windows in the tab", function()
         assert.are.equal("split", screen.state())
         f.manager.widget:hide()

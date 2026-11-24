@@ -195,6 +195,22 @@ function M.resize()
     keep_end(resize)
 end
 
+function M.fill()
+    local manager = M.manager()
+    local win = manager and manager.widget.win_nrs.chat
+    if not win or not vim.api.nvim_win_is_valid(win) then return end
+    vim.api.nvim_win_call(win, function()
+        if vim.fn.line("w$") < vim.fn.line("$")
+            or vim.api.nvim_win_text_height(win, { start_row = vim.fn.line("w0") - 1 }).all >= vim.api.nvim_win_get_height(win) then
+            return
+        end
+        local view = vim.fn.winsaveview()
+        vim.cmd("noautocmd normal! Gzb")
+        view.topline, view.topfill = vim.fn.line("w0"), 0
+        vim.fn.winrestview(view)
+    end)
+end
+
 local function empty(win)
     local buf = vim.api.nvim_win_get_buf(win)
     return vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) == "" and not vim.bo[buf].modified
