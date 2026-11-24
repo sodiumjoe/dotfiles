@@ -155,7 +155,7 @@ local function attach(buf)
     local id = vim.api.nvim_create_augroup(group(buf), { clear = true })
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
         group = id,
-        buffer = buf,
+        buf = buf,
         callback = function()
             if next(notes[buf] or {}) then
                 render(buf)
@@ -164,14 +164,14 @@ local function attach(buf)
     })
     vim.api.nvim_create_autocmd("FileChangedShellPost", {
         group = id,
-        buffer = buf,
+        buf = buf,
         callback = function()
             reanchor(buf)
         end,
     })
     vim.api.nvim_create_autocmd({ "BufUnload", "BufWipeout" }, {
         group = id,
-        buffer = buf,
+        buf = buf,
         callback = function()
             drop(buf)
         end,
@@ -388,16 +388,16 @@ function M.edit(buf, first, last)
         done = true
         close()
     end
-    vim.keymap.set("n", "<C-s>", save, { buffer = fbuf })
+    vim.keymap.set("n", "<C-s>", save, { buf = fbuf })
     vim.keymap.set("i", "<C-s>", function()
         vim.cmd("stopinsert")
         vim.schedule(save)
-    end, { buffer = fbuf })
-    vim.keymap.set("n", "<CR>", save, { buffer = fbuf })
-    vim.keymap.set("n", "q", cancel, { buffer = fbuf })
-    vim.keymap.set("n", "<Esc>", cancel, { buffer = fbuf })
+    end, { buf = fbuf })
+    vim.keymap.set("n", "<CR>", save, { buf = fbuf })
+    vim.keymap.set("n", "q", cancel, { buf = fbuf })
+    vim.keymap.set("n", "<Esc>", cancel, { buf = fbuf })
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-        buffer = fbuf,
+        buf = fbuf,
         callback = function()
             if vim.api.nvim_win_is_valid(win) then
                 vim.api.nvim_win_set_height(win, math.min(10, math.max(3, vim.api.nvim_buf_line_count(fbuf))) + 1)
@@ -405,7 +405,7 @@ function M.edit(buf, first, last)
         end,
     })
     vim.api.nvim_create_autocmd({ "WinLeave", "BufWipeout" }, {
-        buffer = fbuf,
+        buf = fbuf,
         callback = function()
             if done then
                 return
