@@ -52,45 +52,6 @@ id: ${slug}
   console.log(target);
 }
 
-function resolveProject(planFile) {
-  if (!planFile || !fs.existsSync(planFile)) return;
-  const content = fs.readFileSync(planFile, "utf-8");
-  const fm = parseFrontmatter(content);
-  if (!fm.project) return;
-  let project = fm.project;
-  project = project.replace(/^\[\[/, "").replace(/\]\]$/, "");
-  const slug = project.replace(/^projects\//, "").replace(/\/project$/, "");
-  const newPath = projectFile(slug);
-  if (fs.existsSync(newPath)) {
-    console.log(newPath);
-    return;
-  }
-  const legacyPath = path.join(VAULT_ROOT, `${project}.md`);
-  if (fs.existsSync(legacyPath)) {
-    console.log(legacyPath);
-    return;
-  }
-}
-
-function parseChangelog(filePath, pattern, { quiet } = {}) {
-  if (!fs.existsSync(filePath)) return;
-  const content = fs.readFileSync(filePath, "utf-8");
-  const title = getTitle(content);
-  const base = path.basename(filePath);
-  const changelog = extractSection(content, "Changelog");
-  let re;
-  try {
-    re = new RegExp(pattern);
-  } catch (e) {
-    throw new Error(`invalid regex pattern: ${pattern}`);
-  }
-  for (const line of changelog) {
-    if (re.test(line)) {
-      if (!quiet) console.log(`${base}\t${title}\t${line}`);
-    }
-  }
-}
-
 function hasActiveSiblingPlans(slug) {
   const dir = projectDir(slug);
   if (!fs.existsSync(dir)) return false;
@@ -309,20 +270,6 @@ function listProjects() {
   return results;
 }
 
-function listInvalidProjectDirs() {
-  if (!fs.existsSync(PROJECT_DIR)) return [];
-  const entries = fs.readdirSync(PROJECT_DIR, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .filter((entry) => !fs.existsSync(projectFile(entry.name)))
-    .map((entry) => ({
-      name: entry.name,
-      path: path.join(PROJECT_DIR, entry.name),
-      reason: "missing project.md",
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
 function resolveProjectSlug(projectField) {
   const stripped = projectField.replace(/^\[\[/, "").replace(/\]\]$/, "");
   return stripped.replace(/^projects\//, "").replace(/\/project$/, "");
@@ -467,14 +414,11 @@ function closePlan(planFile, { quiet } = {}) {
 
 module.exports = {
   createProject,
-  resolveProject,
-  parseChangelog,
   completeProjects,
   archiveProject,
   archivePlans,
   extractFindings,
   listProjects,
-  listInvalidProjectDirs,
   syncPlans,
   closeTasks,
   closeProject,

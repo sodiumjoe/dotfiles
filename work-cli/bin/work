@@ -9,7 +9,7 @@ const { ensure, logSyncEntries, inject, injectReviews } = require(path.join(LIB,
 const { fetchReviews, fetchReviewsAsync } = require(path.join(LIB, 'reviews.js'));
 const { notePath, todayStr, VAULT_ROOT, PROJECT_DIR, projectDir, projectFile } = require(path.join(LIB, 'paths.js'));
 const { scanOpenItems, formatScanTSV, syncCheck, listTasks, setTaskState } = require(path.join(LIB, 'scan.js'));
-const { createProject, resolveProject, parseChangelog, completeProjects, archiveProject, archivePlans, extractFindings, listProjects, listInvalidProjectDirs, syncPlans, closeTasks, closeProject, closePlan } = require(path.join(LIB, 'project.js'));
+const { createProject, completeProjects, archiveProject, archivePlans, extractFindings, listProjects, syncPlans, closeTasks, closeProject, closePlan } = require(path.join(LIB, 'project.js'));
 const { writeWeeklySummary, isoWeek } = require(path.join(LIB, 'summary.js'));
 const { enqueue, dequeue } = require(path.join(LIB, 'queue.js'));
 const { execFileSync } = require('node:child_process');
@@ -138,11 +138,6 @@ const commands = {
     ensure(getDate(opts));
   },
 
-  promote() {
-    const { opts } = parseOpts(args.slice(1));
-    promote(getDate(opts));
-  },
-
   sync() {
     const { opts } = parseOpts(args.slice(1));
     const dateStr = getDate(opts);
@@ -163,27 +158,6 @@ const commands = {
     }
   },
 
-  'validate-projects'() {
-    const { opts } = parseOpts(args.slice(1));
-    const results = listInvalidProjectDirs();
-    for (const result of results) {
-      process.stdout.write(`${result.name}\t${result.reason}\n`);
-    }
-    if (opts.strict && results.length > 0) process.exitCode = 1;
-  },
-
-  inject() {
-    const { opts } = parseOpts(args.slice(1));
-    const dateStr = getDate(opts);
-    const results = scanOpenItems();
-    inject(dateStr, results);
-  },
-
-  'sync-plans'() {
-    const results = syncPlans();
-    if (results.length === 0) console.log('nothing to link');
-  },
-
   review() {
     const cr = require(path.join(LIB, 'code-review.js'));
     const sub = args[1];
@@ -193,22 +167,6 @@ const commands = {
     else if (sub === 'exit') out = cr.exitSession();
     else throw new Error('usage: work review <enter-pr <n> | submit <EVENT> [body] | exit>');
     console.log(JSON.stringify(out));
-  },
-
-  async gather() {
-    const { opts } = parseOpts(args.slice(1));
-    const dateStr = getDate(opts);
-    const errors = await doGather(dateStr, false);
-
-    console.log('=== sync-check ===');
-    try {
-      const entries = syncCheck(dateStr);
-      for (const e of entries) {
-        console.log(`${e.filename}\t${e.title}\t${e.itemText}\t${e.sourceType}`);
-      }
-    } catch (e) { console.error('FAIL: sync-check'); errors.push(`sync-check: ${e.message}`); }
-
-    if (errors.length) process.exit(1);
   },
 
   summary() {
@@ -256,14 +214,6 @@ const commands = {
       throw new Error('usage: work archive-project <slug>');
     }
     archiveProject(positional[0]);
-  },
-
-  'resolve-project'() {
-    const { positional } = parseOpts(args.slice(1));
-    if (positional.length < 1) {
-      throw new Error('usage: work resolve-project <plan-file>');
-    }
-    resolveProject(positional[0]);
   },
 
   'close-tasks'() {
@@ -371,14 +321,6 @@ const commands = {
 
     // Append to daily log
     appendLog(dateStr, description, sourceType, sourceSlug, sourceTitle);
-  },
-
-  'parse-changelog'() {
-    const { positional } = parseOpts(args.slice(1));
-    if (positional.length < 2) {
-      throw new Error('usage: work parse-changelog <file> <pattern>');
-    }
-    parseChangelog(positional[0], positional[1]);
   },
 
   async tick() {
@@ -636,52 +578,6 @@ const commands = {
     }
   },
 
-  wrap() {
-    const { opts } = parseOpts(args.slice(1));
-    doWrap(getDate(opts));
-  },
-
-  paths() {
-    const { positional } = parseOpts(args.slice(1));
-    const key = positional[0];
-    const map = { vault: VAULT_ROOT, projects: PROJECT_DIR };
-    if (!key || !map[key]) {
-      for (const [k, v] of Object.entries(map)) console.log(`${k}\t${v}`);
-    } else {
-      process.stdout.write(map[key]);
-    }
-  },
-
-  'check-upgrades'() {
-    const { checkUpgrades } = require(path.join(LIB, 'upgrades.js'));
-    const results = checkUpgrades();
-
-    if (results.brew.count > 0) {
-      console.log(`Brew outdated (${results.brew.count}):`);
-      for (const pkg of results.brew.formulae) {
-        console.log(`  ${pkg.name}: ${pkg.current} → ${pkg.latest}`);
-      }
-    } else {
-      console.log('Brew: all up to date');
-    }
-    if (results.brew.error) console.log(`  (error: ${results.brew.error})`);
-
-    console.log('');
-    if (results.npm.count > 0) {
-      console.log(`npm outdated (${results.npm.count}):`);
-      for (const pkg of results.npm.packages) {
-        console.log(`  ${pkg.name}: ${pkg.current} → ${pkg.latest}`);
-      }
-    } else {
-      console.log('npm: all up to date');
-    }
-    if (results.npm.error) console.log(`  (error: ${results.npm.error})`);
-
-    if (!results.hasActionableItems) {
-      console.log('\nAll up to date.');
-    }
-  },
-
   'check-upstream'() {
     const { opts } = parseOpts(args.slice(1));
     const results = checkUpstream();
@@ -718,15 +614,9 @@ Usage: work <command> [options]
 
 Commands:
   ensure                       Create today's daily note if missing
-  promote                      Move checked-off tasks to changelog
   sync [--apply]               Find unlogged changelog completions
   list-projects                List active/evergreen projects (TSV)
-  validate-projects [--strict] List invalid top-level project directories
-  inject                       Rebuild daily note tasks view from scan
-  sync-plans                   Link orphaned plans to projects
-  gather                       Run ensure + promote + sync + scan + inject
-  tick                         Maintenance: gather + sync + conditional wrap
-  wrap                         End-of-day: sync + Claude summary + complete projects
+  tick                         Maintenance: ensure, promote, scan, inject, sync, archive, wrap
   summary                      Show completed and open items
   list-tasks [file]            List open/in-progress tasks (TSV)
   set-task-state <f> <ln> <s>  Set task checkbox state (open|in-progress|done)
@@ -736,10 +626,6 @@ Commands:
   close-tasks <file> [--skip=L] Bulk-close open tasks (done or cancelled)
   close-project <slug> <summary> Complete project with summary
   close-plan <plan-file>         Mark plan as done with findings flag
-  resolve-project <plan-file>  Find project file from plan frontmatter
-  paths [vault|projects]         Print configured paths
-  parse-changelog <file> <pat> Extract matching changelog lines (TSV)
-  check-upgrades               Show outdated brew packages and stale nvim plugins
   check-upstream               Check forked skills for upstream changes
   review enter-pr <n>          Check out PR n for review (session in .review/)
   review submit <EVENT> [body] Submit PR review (APPROVE|REQUEST_CHANGES|COMMENT) and exit
