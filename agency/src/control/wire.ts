@@ -83,18 +83,6 @@ export function sendReply(socket: Socket, reply: ControlReply | LiveReply, timeo
   }).then(() => closed)
 }
 
-export async function serveControl(socket: Socket, handler: (request: ControlRequest) => Promise<ControlReply>, timeoutMs = 5000): Promise<void> {
-  const closed = protectSocketErrors(socket)
-  socket.allowHalfOpen = true
-  try {
-    const request = parseRequest(await receiveFrame(socket, timeoutMs))
-    let reply: ControlReply
-    try { reply = await handler(request) } catch (error) { reply = errorReply(request, error) }
-    await sendReply(socket, reply)
-  } catch { socket.destroy() }
-  finally { socket.destroy(); await closed }
-}
-
 export async function serveProtocols(socket: Socket, control: (request: ControlRequest) => Promise<ControlReply>, timeoutMs = 5000, live?: (raw: unknown) => Promise<LiveReply>): Promise<void> {
   const closed = protectSocketErrors(socket)
   socket.allowHalfOpen = true

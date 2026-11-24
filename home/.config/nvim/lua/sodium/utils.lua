@@ -6,11 +6,7 @@ function M.is_executable(bin)
     return vim.fn.executable(bin) > 0
 end
 
-function M.path_exists(path)
-    return (vim.uv or vim.loop).fs_stat(path)
-end
-
-function M.merge(a, b)
+local function merge(a, b)
     return vim.tbl_extend("force", a, b)
 end
 
@@ -19,7 +15,7 @@ function M.map(mappings)
         local mode = m[1]
         local lhs = m[2]
         local rhs = m[3]
-        local opts = M.merge(default_mapping_opts, m[4] or {})
+        local opts = merge(default_mapping_opts, m[4] or {})
         vim.keymap.set(mode, lhs, rhs, opts)
     end
 end

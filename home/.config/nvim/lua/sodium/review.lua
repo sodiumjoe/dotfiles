@@ -23,8 +23,6 @@ end
 M._state = {
     session = nil,
     reviewed = {},
-    previous_branch = nil,
-    current_user = nil,
     files = {},
     file_diffs = {},
 }
@@ -52,27 +50,9 @@ function M.reset()
     M._state = {
         session = nil,
         reviewed = {},
-        previous_branch = nil,
-        current_user = nil,
         files = {},
         file_diffs = {},
     }
-end
-
-function M.set_previous_branch(branch)
-    M._state.previous_branch = branch
-end
-
-function M.get_previous_branch()
-    return M._state.previous_branch
-end
-
-function M.set_current_user(user)
-    M._state.current_user = user
-end
-
-function M.get_current_user()
-    return M._state.current_user
 end
 
 function M.set_files(items)
@@ -261,8 +241,6 @@ function M.load(toplevel)
     for _, rel in ipairs(session.reviewed or {}) do
         M._state.reviewed[tostring(session.id)][rel] = true
     end
-    M.set_previous_branch(session.previous_branch)
-    M.set_current_user(session.user)
 
     local diffs = M.parse_file_diffs(read_file(dir .. "/diff") or "")
     M.set_file_diffs(diffs)

@@ -34,7 +34,6 @@ end
 function M.setup(deps)
     if controller then return controller end
     deps = deps or {}
-    require("sodium.agency.layout").setup()
     require("sodium.agency.screen").setup()
     local Registry = require("agentic.session_registry")
     local api = {
@@ -92,7 +91,6 @@ function M.setup(deps)
     end
     local function create(opts, callback)
         local agent = assert(client(), "Agency is not configured")
-        require("sodium.agency.layout").cleanup()
         local cwd = opts.cwd
         local meta = { backend_id = opts.backend_id, selection = opts.selection, environment = opts.environment }
         local manager = start({ kind = "new", cwd = cwd and function() return cwd end, meta = meta }, agent, opts.focus)
@@ -129,7 +127,6 @@ function M.setup(deps)
         end
         local pending = Registry.find_by_acp_session_id(id, agent)
         if pending then return pending end
-        require("sodium.agency.layout").cleanup()
         return start({ kind = "load", session_id = id, cwd = record.definition.cwd, title = record.definition.backendId, meta = { backend_id = record.definition.backendId } }, agent, focus)
     end
     local function start_error(manager) return Rebind.reason(manager._agency_start_error) end

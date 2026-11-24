@@ -50,15 +50,6 @@ export function launchContractFingerprint(input: LaunchContract & { entrypoint: 
   return digest(JSON.stringify([parseLaunchContract(candidate), hash(configurationFingerprint), absolutePath(entrypoint), absolutePath(executable)]))
 }
 
-export function parseConfiguredLaunchContract(input: unknown): ConfiguredLaunchContract {
-  try {
-    const v = object(input)
-    keys(v, ["id", "providerId", "adapterPackage", "adapterVersion", "sessionLoad", ...["promptCapabilities", "sdkVersion"].filter(key => Object.hasOwn(v, key)), "modes", "reasoning", "effectiveMode", "permissionProfiles", "modelOption", "reasoningOption", "modeOption", "permissionEvidence", "deadlines", "entrypoint", "executable", "fingerprint"])
-    const contract = parseLaunchContract(Object.fromEntries(Object.entries(v).filter(([key]) => !["entrypoint", "executable", "fingerprint"].includes(key))))
-    return { ...contract, entrypoint: absolutePath(v.entrypoint), executable: absolutePath(v.executable), fingerprint: hash(v.fingerprint) }
-  } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }
-}
-
 export async function configureLaunchContract(input: LaunchContract, profile: ProviderProfile, configuration: ConfigEvidence): Promise<ConfiguredLaunchContract> {
   const contract = parseLaunchContract(input)
   const refuse = (reason: string): never => { throw new AgentError("ADAPTER_UNQUALIFIED", undefined, "backend " + contract.providerId + " is not usable: " + reason) }

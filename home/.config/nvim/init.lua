@@ -4,7 +4,6 @@ local o = vim.o
 o.termguicolors = true
 
 g.mapleader = [[ ]]
-g.python_host_prog = "/usr/bin/python"
 g.python3_host_prog = "$HOMEBREW_PREFIX/bin/python3"
 
 g.loaded_netrw = 1
@@ -39,9 +38,6 @@ require("sodium.config.diagnostics")
 
 require("lazy").setup({ import = "sodium.plugins" }, {
     lockfile = vim.fn.stdpath("config") .. "/lazy-lock.json",
-    dev = {
-        path = "~/home",
-    },
     install = {
         missing = true,
         colorscheme = { "default" },

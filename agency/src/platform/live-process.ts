@@ -11,9 +11,7 @@ export class LiveProcessError extends Error {
 export type LiveCleanupEvidence = Readonly<{ launchAttemptId: string; group: ProcessGroupIdentity; terminal: ChildTerminal; transport: "closed" | "destroyed" }>
 type CleanupLimits = { deadline: number; terminateMs: number; absenceMs: number; transportCloseMs: number; retry?: true }
 export type LiveProcessGroup = { readonly owner: OwnedChild; identity(): ProcessGroupIdentity; observeMember(identity: ProcessIdentity): void; cleanup(input: CleanupLimits): Promise<LiveCleanupEvidence> }
-const registrations = new WeakSet<LiveProcessGroup>()
 const evidence = new WeakMap<LiveCleanupEvidence, { group: LiveProcessGroup; attribution: LiveCleanupEvidence }>()
-export function isLiveProcessGroup(value: LiveProcessGroup): boolean { return registrations.has(value) }
 export function isLiveCleanupEvidence(value: LiveCleanupEvidence, group: LiveProcessGroup): boolean {
   const issued = evidence.get(value)
   return !!issued && issued.group === group && isDeepStrictEqual(value, issued.attribution)
@@ -231,6 +229,5 @@ export async function captureLiveProcess(input: { owner: OwnedChild; adapter: Pl
       return pending
     },
   })
-  registrations.add(group)
   return group
 }

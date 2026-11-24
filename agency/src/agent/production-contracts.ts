@@ -36,6 +36,5 @@ const claude: LaunchContract = Object.freeze({
   deadlines: codex.deadlines,
 })
 const contracts = Object.freeze([codex, claude])
-export const PRODUCTION_MUTATION_TRANSPORT_MS = Math.max(...contracts.map(contract => contract.deadlines.overallMs + contract.deadlines.transportCloseMs + 4000))
 
 export function staticProductionContracts(): readonly LaunchContract[] { return contracts }

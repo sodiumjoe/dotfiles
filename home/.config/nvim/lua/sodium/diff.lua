@@ -100,9 +100,4 @@ function M.open(opts)
     end
 end
 
-M._scratch_buffer = scratch_buffer
-M._filetype_from_path = filetype_from_path
-M._git_file_content = git_file_content
-M._display_path = display_path
-
 return M

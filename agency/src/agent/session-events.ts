@@ -113,6 +113,3 @@ export function displayTitle(title: string): { title: string; titleTruncated: bo
 }
 
 function invalid(): never { throw new AgentError("INVALID_PROTOCOL") }
-export function knownKeys(value: Record<string, unknown>, required: readonly string[], allowed: readonly string[]): void {
-  if (required.some(key => !Object.hasOwn(value, key)) || Object.keys(value).some(key => !allowed.includes(key))) invalid()
-}

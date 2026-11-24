@@ -105,7 +105,6 @@ function enterPr(pr, cwd = process.cwd()) {
 
   const prNumber = String(pr);
   const { baseRefName } = JSON.parse(gh(toplevel, ["pr", "view", prNumber, "--json", "baseRefName"]));
-  const user = gh(toplevel, ["api", "user", "--jq", ".login"]).trim();
   const headRef = `pr-${prNumber}`;
   const previousBranch = git(toplevel, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const session = {
@@ -116,7 +115,6 @@ function enterPr(pr, cwd = process.cwd()) {
     toplevel,
     previous_branch: previousBranch,
     stash_ref: null,
-    user,
     reviewed: [],
   };
 

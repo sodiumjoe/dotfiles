@@ -1,27 +1,5 @@
 local M = {}
 
-function M.resolve(path)
-    local absolute = vim.fs.normalize(vim.fn.fnamemodify(path, ":p")):gsub("/$", "")
-    if absolute == "" then
-        absolute = "/"
-    end
-    local suffix, current = {}, absolute
-    while current ~= "/" do
-        local resolved = vim.uv.fs_realpath(current)
-        if resolved then
-            return vim.fs.normalize(resolved .. (#suffix > 0 and "/" .. table.concat(suffix, "/") or ""))
-        end
-        table.insert(suffix, 1, vim.fs.basename(current))
-        current = vim.fs.dirname(current)
-    end
-    return "/" .. table.concat(suffix, "/")
-end
-
-function M.inside(cwd, path)
-    cwd, path = M.resolve(cwd), M.resolve(path)
-    return cwd == "/" or cwd == path or path:sub(1, #cwd + 1) == cwd .. "/"
-end
-
 function M.capture(bufnr, mode)
     bufnr = bufnr or vim.api.nvim_get_current_buf()
     local name = vim.api.nvim_buf_get_name(bufnr)

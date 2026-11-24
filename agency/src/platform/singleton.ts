@@ -59,10 +59,6 @@ function commandWithTimeout(platform: "darwin" | "linux", lockFd: number, argv: 
   return { file: "/usr/bin/flock", args: ["--no-fork", "-w", String(timeoutSeconds), "/proc/self/fd/3", ...argv] }
 }
 
-export function startupLockCommand(platform: "darwin" | "linux", lockFd: number, argv: readonly string[]): StartupLockCommand {
-  return commandWithTimeout(platform, lockFd, argv, 10)
-}
-
 async function assertLockHelper(path: string): Promise<void> {
   const stats = await lstat(path)
   if (stats.isSymbolicLink()) throw new Error(`${path} is a symlink`)
