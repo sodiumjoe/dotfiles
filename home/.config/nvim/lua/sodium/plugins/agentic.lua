@@ -684,7 +684,7 @@ exec agy acp]] } } }
                 position = "stacked",
                 code = diagnostics.window_opts,
                 files = diagnostics.window_opts,
-                input = vim.tbl_extend("force", diagnostics.window_opts, { height = 0.25 }),
+                input = vim.tbl_extend("force", diagnostics.window_opts, { height = 0.25, top_padding = true }),
                 todos = diagnostics.window_opts,
                 chat = vim.tbl_deep_extend("force", diagnostics.window_opts, { win_opts = { foldminlines = 0 } }),
                 diagnostics = diagnostics.window_opts,
@@ -699,6 +699,7 @@ exec agy acp]] } } }
             folding = {
                 tool_calls = { enabled = true, threshold = 0, fold_on_error = true, fold_completed_diffs = true },
                 thinking = { enabled = true },
+                group_adjacent = true,
             },
             keymaps = {
                 widget = {
