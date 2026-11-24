@@ -78,6 +78,34 @@ describe("Agency screen", function()
         end
     end)
 
+    it("keeps a chat that showed its end at the end through a grow and a shrink, and leaves one scrolled up", function()
+        local text = {}
+        for i = 1, 200 do text[#text + 1] = "line " .. i end
+        f.client:_handle_message({ method = "session/update", params = { sessionId = f.manager.session_id,
+            update = { sessionUpdate = "agent_message_chunk", content = { type = "text", text = table.concat(text, "\n") } } } })
+        f.flush()
+        screen.conversation(f.manager)
+        f.flush()
+        local win = f.manager.widget.win_nrs.chat
+        local count = vim.api.nvim_buf_line_count(f.manager.message_writer.bufnr)
+        local function resize(lines)
+            vim.o.lines = lines
+            vim.api.nvim_exec_autocmds("VimResized", {})
+            f.flush()
+            vim.cmd("redraw")
+        end
+        vim.api.nvim_win_call(win, function() vim.cmd("normal! Gzb") end)
+        vim.api.nvim_exec_autocmds("WinScrolled", {})
+        resize(70)
+        resize(40)
+        assert.are.equal(count, vim.fn.line("w$", win))
+        vim.api.nvim_win_call(win, function() vim.cmd("normal! 50Gzt") end)
+        vim.api.nvim_exec_autocmds("WinScrolled", {})
+        resize(70)
+        resize(40)
+        assert.is_true(vim.fn.line("w$", win) < count)
+    end)
+
     it("derives conversation, split, document and none from the windows in the tab", function()
         assert.are.equal("split", screen.state())
         f.manager.widget:hide()

@@ -211,6 +211,18 @@ function M.fill()
     end)
 end
 
+function M.track()
+    local manager = M.manager()
+    local win = manager and manager.widget.win_nrs.chat
+    if not win or not vim.api.nvim_win_is_valid(win) then return end
+    local height, last = vim.api.nvim_win_get_height(win), vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
+    local state = vim.w[win].agency_view
+    if state and state.height ~= height and state.at_end and vim.fn.line("w$", win) < last then
+        vim.api.nvim_win_call(win, function() vim.cmd("noautocmd normal! Gzb") end)
+    end
+    vim.w[win].agency_view = { height = height, at_end = vim.fn.line("w$", win) >= last }
+end
+
 local function empty(win)
     local buf = vim.api.nvim_win_get_buf(win)
     return vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) == "" and not vim.bo[buf].modified
@@ -291,6 +303,13 @@ function M.setup()
         callback = function()
             M.resize()
             M.fill()
+            M.track()
+        end,
+    })
+    vim.api.nvim_create_autocmd({ "WinScrolled", "WinResized" }, {
+        group = group,
+        callback = function()
+            M.track()
         end,
     })
     vim.api.nvim_create_autocmd("WinNew", {
