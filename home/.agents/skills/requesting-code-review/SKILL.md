@@ -2,9 +2,10 @@
 name: requesting-code-review
 description: Use when completing tasks, implementing major features, or before merging to verify work meets requirements
 plugin: superpowers@stripe-internal-marketplace
-version: 1.0.1
 skill: requesting-code-review
-content_hash: cfcee1b06774e7c0517f1e09be1a11f2d5680257072723e709ddbcf7e08b795a
+content_hash: 2180e14a448e9410bec88e6646a2d1f0ce7fdd58de27388c1e052e929679d2bc
+support_hashes:
+  code-reviewer.md: 82e370be6b3447523816286195571e4216ba56ba1ad6ad0e87862294c4c78dcb
 ---
 
 # Requesting Code Review
@@ -56,7 +57,7 @@ Dispatch a `general-purpose` subagent, filling the template at [code-reviewer.md
 
 You: Let me request code review before proceeding.
 
-BASE_SHA=$(git log --oneline | grep "Task 1" | head -1 | awk '{print $1}')
+BASE_SHA=$(git log --oneline | grep "Task 1" | head -1 | cut -d' ' -f1)
 HEAD_SHA=$(git rev-parse HEAD)
 
 [Dispatch code reviewer subagent]

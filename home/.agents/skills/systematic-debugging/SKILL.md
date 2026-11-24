@@ -2,9 +2,14 @@
 name: systematic-debugging
 description: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes
 plugin: superpowers@stripe-internal-marketplace
-version: 1.0.1
 skill: systematic-debugging
-content_hash: 808fc5717aa88ad65efff312b11c186294d3e6ee301afb584e2f86599b137787
+content_hash: 51c6435d98c83c42c96ba7c35725a0b2c376cd487fb1a4e6bd0ddbe7e33ef202
+support_hashes:
+  condition-based-waiting-example.ts: 40ae5ebe497fdf310200e43fe986552546d0a22837c0d39e855db1cfd33eb88e
+  condition-based-waiting.md: e89fec8400d6cd50f43407cec9fab50976ba4d55d0ec2eb51c0bd68036b54c26
+  defense-in-depth.md: 1e175fb86fc357e58c6aebf5441e481e1b7868b4380c0456b63a17eefbd18ba7
+  find-polluter.sh: dd7b8f13c4cc2a24b33ff87b18da9248f3e1c80a085c3316224f69ff0fa5c43c
+  root-cause-tracing.md: 75b933b6a8c40bdb2031b10f21654395b56ec6ab6bc7b018c18d3fe57aeb7fb8
 ---
 
 # Systematic Debugging
@@ -92,11 +97,11 @@ You MUST complete each phase before proceeding to the next.
    ```bash
    # Layer 1: Workflow
    echo "=== Secrets available in workflow: ==="
-   echo "IDENTITY: ${IDENTITY:+SET}${IDENTITY:-UNSET}"
+   echo "IDENTITY: $([ -n "${IDENTITY:-}" ] && echo SET || echo UNSET)"
 
    # Layer 2: Build script
    echo "=== Env vars in build script: ==="
-   env | grep IDENTITY || echo "IDENTITY not in environment"
+   printenv IDENTITY >/dev/null 2>&1 && echo "IDENTITY in environment" || echo "IDENTITY not in environment"
 
    # Layer 3: Signing script
    echo "=== Keychain state: ==="

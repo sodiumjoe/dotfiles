@@ -20,9 +20,12 @@ base=$3
 shift 4
 sdd="$(cd "$(dirname "$0")/../../subagent-driven-development/scripts" && pwd)"
 
-git rev-parse --verify --quiet "$base" >/dev/null || { echo "bad BASE: $base" >&2; exit 2; }
+# The repository the workspace and ledger belong to (see sdd-repo); BASE and
+# HEAD are read there, not in the bare cwd.
+repo=$("${BASH:-bash}" "$sdd/sdd-repo" --with-commit)
+git -C "$repo" rev-parse --verify --quiet "$base" >/dev/null || { echo "bad BASE: $base" >&2; exit 2; }
 
-dir=$("${BASH:-bash}" "$sdd/sdd-workspace" "$plan")
+dir=$("$sdd/sdd-workspace" "$plan")
 log="$dir/task-${n}-tests.log"
 ledger="$dir/progress.md"
 
@@ -45,8 +48,8 @@ if [ "$rc" -ne 0 ]; then
   exit "$rc"
 fi
 
-last=$(awk '!/^[[:space:]]*$/ {last=$0} END {if (last != "") print last; else print "passed (no output)"}' "$log")
+last=$(grep -v '^[[:space:]]*$' "$log" | tail -n 1) || last="(no output)"
 [ -f "$ledger" ] || printf '# SDD ledger — plan: %s\n' "$plan" > "$ledger"
-line="Task $n: complete (commits $(git rev-parse --short=7 "$base")..$(git rev-parse --short=7 HEAD), tests: $cmd → $last)"
+line="Task $n: complete (commits $(git -C "$repo" rev-parse --short=7 "$base")..$(git -C "$repo" rev-parse --short=7 HEAD), tests: $cmd → $last)"
 printf '%s\n' "$line" >> "$ledger"
 echo "ledger: $line"

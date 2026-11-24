@@ -1,248 +1,260 @@
 ---
 name: brainstorming
-description: "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation."
+description: "You MUST use this before any creative work - creating features, building components, adding functionality, modifying behavior, or planning anything new, in software or out of it (a talk, a business, a renovation)."
 plugin: superpowers@stripe-internal-marketplace
-version: 1.0.1
 skill: brainstorming
-content_hash: a32d2255354775aa124855aa7100cf276bea096fff4ebb3a0edf57be216e6c72
+content_hash: 2c9ca71f94886f9ca9f4aef055f7cafb3e1a9bdf3aeebf8f4cb547c69405d207
+support_hashes:
+  builder-check-prompt.md: 36d51a4723d6f0a3ce5811a0ea3b3a8424f07533947e1355f5d8cb8cce40c55e
+  scripts/frame-template.html: 6a8a4e58bd6a44b904e2e3c57de774481d909204597e1498de53f1b2fecc4c4e
+  scripts/helper.js: 43c6d69954a46ec34a2a262bcc62a9a7e83e839c739f199cb72646d397c686e3
+  scripts/server.cjs: 763abf96510e0b892a1141397b31aa82ef900cf87ed34dde94bc8782baf4a7ca
+  scripts/start-server.sh: 314dd68dc00e8dd94c7491aca8a5f004c7fddffc161e2b07482f29f48d13659a
+  scripts/stop-server.sh: 0b5ccbbd57f62d3ed88993f7940b5ee0e5c0fc9b21c550c623da4f6292e47daf
+  visual-companion.md: 6ffcb038b53254bd31debaa15e12dcd4ff24bd63d690e0b644ac6396701cf2e2
 ---
 
-# Brainstorming Ideas Into Designs
+# Brainstorming
 
-Help turn ideas into fully formed designs and specs through natural collaborative dialogue.
+You are very good at building. You build what you believe your human
+partner wants, and that belief is usually thinner than it feels. This
+skill is for finding out what they actually want, and why, before
+anything gets built.
 
-Start by classifying how much process the request needs, then work
-through your path: understand the context, refine the idea, present a
-design, and get your human partner's approval.
+People often haven't finished working out what they want. Good questions
+help them think it through. When you understand the why, you make the
+hundred decisions they never mention the way they would have made them.
 
-## Establish Shared Understanding
+## First: What Do You Actually Know?
 
-The outcome of brainstorming is an understanding your human partner can
-recognize and correct, grounded in what they want to accomplish.
+Before you reply, ask yourself: what do I know about what they want, and
+why?
 
-1. **Discover intent.** Use the request and available context to identify
-   the intended outcome, who it is for, and what success looks like. When
-   that information is missing, ask one focused question about purpose or
-   intended use before proposing features or an approach. Knowing the app
-   genre does not tell you why your partner wants it. Gathering missing
-   requirements does not ask them to authorize the task again.
-2. **Write back your understanding.** Summarize the intended outcome,
-   relevant constraints, and success criteria in a short note your partner
-   can assess. Separate what they said from assumptions. Invite correction
-   and incorporate their answer before treating this as the design brief.
-3. **Carry intent into the design.** Preserve the agreed understanding in
-   the selected path's design artifact: the written work project for architectural
-   work, or the in-chat design/probe for bounded work and spikes. Check
-   proposed features and technical choices against that understanding.
+- **Everything that matters is in the request** ("make the icon cornflower
+  blue"). This is a quick, clear task. Do it, and say what you did.
+- **Something non-trivial is missing.** Start the conversation.
 
-When the request already supplies the purpose and constraints, reflect
-that understanding instead of asking the same questions again. Keep the
-note concise; its accuracy and the opportunity to correct it matter.
+Before you start implementing, you must, in order:
 
-<HARD-GATE>
-Before taking any implementation action, including invoking an
-implementation skill, writing product code, scaffolding, installing
-product dependencies, or creating an external project, complete the
-selected path's prerequisites:
+1. Lay out the approaches in a message of their own, and have your
+   human partner pick one (see Lay out the approaches).
+2. Write the design doc, short or full (see Size the Work).
+3. Get their approval of that doc.
+4. Invoke the writing-plans skill.
 
-- Spike: the human partner approves the question and probe.
-- Bounded: the human partner approves the short in-chat design.
-- Architectural: the human partner reviews and approves the written work project,
-  then reviews the written implementation plan and selects its execution
-  method. Conversational design approval only permits writing the project;
-  project approval only permits invoking writing-plans.
+If nothing is open when you write your first message and there's one
+sensible way, steps 1 to 3 happen in that message (see Your First
+Message).
 
-A reply approves the stage actually presented. Approval of an idea or
-feature scope does not approve artifacts that do not exist yet. Resume
-at the earliest incomplete stage; do not turn one approval into permission
-to skip the rest of the selected path. Read-only project exploration is
-allowed while those prerequisites remain incomplete.
-</HARD-GATE>
+Two things aren't implementing: a spike they said yes to (see Spike to
+feel things out), and doing what they asked once they've opted out of
+the questions.
 
-## Three Paths
+## Look Before You Ask
 
-Before your first question, classify the request and say the
-classification out loud — "this looks bounded, so I'll present a short
-design here rather than write a spec" — so your human partner can
-override it:
+In an existing project, or when they've given you context (a spec, a plan,
+a handoff, files they pointed at, earlier conversation), dig in before your
+first message. Read what they referred to and the code or material it
+connects to, and keep reading until you can explain how the relevant
+parts work today and what this change would touch. Never ask what the
+project or their context already answers, or reopen what they've
+already decided.
 
-- **Spike** — a feasibility question ("can we...", "is it possible...",
-  "quick and dirty is fine") whose output is an answer, not code you
-  keep. Present the question and what you'll try in 2-3 sentences, get
-  a nod, then find out as cheaply as correctness allows. No design
-  doc, no spec file. Report findings as a recommendation; anything you
-  built stays labeled throwaway.
-- **Bounded** — a well-scoped change to code that already exists in
-  this repo: a new flag, a small endpoint, a one-file fix.
-  Understanding the kind of app is not enough — bounded means the flow
-  you are changing is already here to read. If there is no existing
-  flow to change, the task is not bounded. Ask the clarifying
-  questions that matter, present a short design IN CHAT (a few
-  sentences to a few short paragraphs), and STOP. Implementation
-  starts only after your human partner says yes to that design — a
-  bounded task's approval is as hard a gate as an architectural
-  one. No spec file, no implementation plan document.
-- **Architectural** — new projects, new subsystems, changes that
-  restructure how components fit together or alter interfaces others
-  depend on. Follow the full process: questions, approaches, sectioned
-  design, written work project, then the writing-plans skill.
+## Your First Message
 
-When in doubt between two paths, take the heavier one. The ratchet is
-one-way: hidden complexity discovered mid-task upgrades the path —
-stop, say so, and step up. Nothing downgrades mid-task.
+Move the work forward, with one of these:
 
-## Anti-Pattern: "Too Simple To Need Approval"
+- **They've already said what they want** (a spec, a plan, a detailed
+  request): aim for about 200 words for the whole message. Echo their
+  request back in your own words, so they can see whether you've got its
+  shape: what they want, who it's for, and why, as far as they've said.
+  Add what you found that bears on it: how the relevant parts work today
+  and what the change would touch. If you found something they may not
+  have considered that would change what they're asking for or how it
+  has to be built, like a constraint, a conflict, or a cheaper path, say
+  so plainly. How to build it comes later, once you understand what they
+  want (see Lay out the approaches). End with one line inviting
+  corrections. Then, if they haven't told you why they want it, even if
+  you can guess, ask about that: one open question in their own terms,
+  with nothing to pick from. If they have told you, and their request
+  and the project leave open something whose answer would change what
+  gets built, ask about the one that would change it most; when its
+  choices can be named, sketch each concretely, with what it trades off
+  and which you'd pick. If nothing like that is open, there's one
+  sensible way: end with the short design itself (the approach, a line on
+  why the others don't fit, and the design in a few lines) and ask them
+  to approve it. Their approval covers the approach and the design: write
+  the short design doc as approved and go on to the plan.
+  Specs are often incomplete, so confirm before you build on one.
+- **They haven't:** one open question, in their own terms, about the
+  biggest thing their request leaves unsettled. Say why you're asking:
+  what the answer would change about what you build. For "a website for
+  my bakery": "If it's mostly for people deciding whether to stop by,
+  I'd lead with hours and what's in the case today; taking orders is a
+  different site. What do you want someone to do when they land on it?"
 
-Every path ends with your human partner approving the required design
-before implementation. A bounded change may need only two sentences in
-chat. A new todo-list project is architectural and requires the written
-work project and planning handoffs. Scale the artifact to the selected path;
-complete that path's reviews before implementation.
+How the message ends depends on whether their message asked for
+brainstorming:
 
-## Red Flags
+- **They asked for it** (by name, by invoking it, or by asking for a
+  design discussion): end there. They want this conversation.
+- **They didn't:** they may not want a conversation at all. End with a
+  light, one-line offer to just get going instead, like
+  "Or if you'd rather I just dive in, say so." If they take you up on
+  it, this skill is done: state any significant how-it-gets-made choice
+  (platform, language, medium) in one plain line, then do what they
+  asked through the normal workflow.
 
-| Thought | Reality |
-|---------|---------|
-| "This is too simple to need a design" | Follow the selected path: a bounded change gets a short chat design; an architectural change gets the written work project and planning handoffs. |
-| "I'll call it bounded and skip the project" | Reaching for a label to skip work IS the doubt — take the heavier path. |
-| "It's bounded and the design is obvious — I'll start while they read it" | The gate is the approval, not the design's length. Present, then stop until you hear yes. |
-| "I understand this kind of app, so it's bounded" | Bounded measures the repo, not your familiarity. A new project has no existing flow — it is architectural. |
-| "The spike works, so I'll keep the code" | A spike's output is an answer. Keeping the code is a new request — classify it. |
-| "It grew, but I'm almost done — no need to re-classify" | Hidden complexity upgrades the path mid-task. Stop and say so. |
-| "They approved the spike, so the follow-up change is approved too" | Each task gets its own classification and its own approval. |
+That's the whole message.
 
-## Checklist
+## The Conversation
 
-Classify first, announce the path, then create a task for each item on
-your path and complete them in order.
+Ask a question only when the answer would change what gets built and
+neither the request nor the project answers it. Otherwise, state your
+call and your reason as a proposal they can correct, and move the work
+forward. Process steps are always your calls: writing things up, where
+files go, looking further, how to show something. Do them and say so.
+Ask one at a time. Use plain language, pitched just a little above where
+your human partner is. Match their vocabulary; never use process jargon.
+You never need to quote this skill to your human partner.
 
-**Spike:**
-1. **Explore project context** — enough to frame the probe
-2. **Present question + probe plan** — 2-3 sentences
-3. **Get approval** — a nod is enough
-4. **Investigate** — as cheaply as correctness allows
-5. **Report findings** — a recommendation; label anything built as throwaway
+Be clear and concise. Lead with what matters. Avoid jargon. When you
+report what you found, give them the most important findings and offer
+the rest.
 
-**Bounded:**
-1. **Explore project context** — check files, docs, recent commits
-2. **Ask clarifying questions** — one at a time, the ones that matter
-3. **Present short design in chat** — approach, files touched, testing
-4. **Get approval** — STOP and wait for an explicit yes; presenting the design and starting in the same breath is skipping the gate
-5. **Implement** — proceed with the normal development workflow (TDD applies); no plan document
+**Get them describing.** Until you know why they want it, ask open
+questions, with no example answers attached. Their own words carry
+intent that your options can't. Once you know why, when a decision has
+choices you can name, sketch each concretely, with what it trades off
+and which you'd pick. When they say "just guess" or "what do you think?",
+propose something concrete.
 
-**Architectural:**
-1. **Explore project context** — check files, docs, recent commits
-2. **Offer the visual companion just-in-time** — NOT upfront. The first time a question would genuinely be clearer shown than described, offer it then (its own message); on approval its browser tab opens for you. If no visual question ever arises, never offer it. See the Visual Companion section below.
-3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
-4. **Propose 2-3 approaches** — with trade-offs and your recommendation
-5. **Present design** — in sections scaled to their complexity, get user approval after each section
-6. **Create work project** — create `~/stripe/work/projects/<slug>/project.md` with the validated design, tasks, changelog, and notes
-7. **Project self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
-8. **User reviews work project** — ask user to review the project file before proceeding
-9. **Transition to implementation** — invoke writing-plans skill to create implementation plan
+**How it gets made.** Every project rests on choices about medium, tools,
+materials, and resources: the platform, programming language, and
+libraries for an app; the medium for a piece of art. Read from how they
+talk which of those choices they want to make. Someone who raises the how
+or asks about trade-offs wants the options with your pick. Someone who
+talks about outcomes is handing you the how: make those calls and state
+each in a line. When there's existing work, build on what it already
+uses. Any choice you make goes in the design as your call, never as
+something they agreed to.
 
-## Process Flow
+**Ground to cover.** This is territory, not a script. Never read these
+out as questions:
 
-```dot
-digraph brainstorming {
-    "Classify: spike / bounded / architectural" [shape=diamond];
-    "Present question + probe (2-3 sentences)" [shape=box];
-    "Ask clarifying questions (bounded)" [shape=box];
-    "Present short design in chat" [shape=box];
-    "Human approves?" [shape=diamond];
-    "Investigate; report recommendation" [shape=doublecircle];
-    "Implement via normal workflow (no plan doc)" [shape=doublecircle];
-    "Explore project context" [shape=box];
-    "Ask clarifying questions" [shape=box];
-    "Propose 2-3 approaches" [shape=box];
-    "Present design sections" [shape=box];
-    "User approves design?" [shape=diamond];
-    "Create work project" [shape=box];
-    "Project self-review\n(fix inline)" [shape=box];
-    "User reviews project?" [shape=diamond];
-    "Invoke writing-plans skill" [shape=doublecircle];
-    "Hidden complexity? Upgrade path" [shape=box];
+- what kind of thing this is, and what makes it special
+- why now, and what success looks like to them
+- goals, non-goals, and anti-goals (what would make this a failure even
+  if it technically works)
+- prior art: what they've seen elsewhere, loved or hated
+- current state: what exists now, what they've tried
+- the details they care about
 
-    "Classify: spike / bounded / architectural" -> "Present question + probe (2-3 sentences)" [label="spike"];
-    "Classify: spike / bounded / architectural" -> "Ask clarifying questions (bounded)" [label="bounded"];
-    "Classify: spike / bounded / architectural" -> "Explore project context" [label="architectural"];
-    "Present question + probe (2-3 sentences)" -> "Human approves?";
-    "Ask clarifying questions (bounded)" -> "Present short design in chat";
-    "Present short design in chat" -> "Human approves?";
-    "Human approves?" -> "Investigate; report recommendation" [label="spike: yes"];
-    "Human approves?" -> "Implement via normal workflow (no plan doc)" [label="bounded: yes"];
-    "Hidden complexity? Upgrade path" -> "Classify: spike / bounded / architectural";
-    "Explore project context" -> "Ask clarifying questions";
-    "Ask clarifying questions" -> "Propose 2-3 approaches";
-    "Propose 2-3 approaches" -> "Present design sections";
-    "Present design sections" -> "User approves design?";
-    "User approves design?" -> "Present design sections" [label="no, revise"];
-    "User approves design?" -> "Create work project" [label="yes"];
-    "Create work project" -> "Project self-review\n(fix inline)";
-    "Project self-review\n(fix inline)" -> "User reviews project?";
-    "User reviews project?" -> "Create work project" [label="changes requested"];
-    "User reviews project?" -> "Invoke writing-plans skill" [label="approved"];
-}
-```
+**Make every question specific** to their project and what they've told
+you. Ask Socratically, the way a sharp colleague would: build each
+question on their last answer or on something you found, so it helps
+them think through a consequence or a case they may have missed
+("Voting closes before the meeting, and two members joined this month.
+Does someone who joins mid-round get a vote?"). When the reason isn't
+already plain, say what you're hoping to learn or what the answer would
+change. A proposal they can correct, plus your reason for it, often
+beats a question.
 
-**Terminal states are path-bound.** Architectural: the ONLY skill you
-invoke after brainstorming is writing-plans — never frontend-design,
-mcp-builder, or any other implementation skill. Bounded: after
-approval, implementation proceeds directly through the normal
-development workflow; no plan document. Spike: the terminal state is a
-reported recommendation.
+**Do recon.** Once you have a bit of grounding and looking further
+would help, go look: deeper into their codebase or project, their own
+files and data, or the web. Say what you looked for and what you found.
 
-## The Process
+**Lay out the approaches.** Once you understand what they want, and
+before you write anything up, put the ways of building it in a message
+of its own. Come up with several real alternatives and drop the weak
+ones, including any that work against why they want it and any the
+existing work rules out. Sketch the two or three that remain concretely
+enough to picture, grounded in what the project actually does, with what
+each trades off. Recommend one and say why, then ask which way they want
+to go; if they've handed you the how, say you'll go with your pick
+instead. When there's genuinely one sensible way, say so in that
+message and explain why the others don't fit; the design comes in the
+next one. This is for how it gets built; for what they want, get them
+describing first.
 
-The subsections below serve the bounded and architectural paths (a
-spike stops at "present the probe, get a nod"). Sections from
-**Exploring approaches** onward are architectural-path depth — for
-bounded work, context plus a few questions plus a short in-chat design
-is the whole process.
+**Show, don't tell.** Whenever seeing would help more than reading,
+sketch it in text: a few lines of what they'd see. Offer the visual
+companion (below) when the look itself is theirs to decide:
 
-**Understanding the idea:**
+- something they'll look at: a screen, a page, a printout, a sign
+- a layout or arrangement: of a screen, a room, a schedule
+- a flow or a sequence of steps
+- options that would look different from each other
+- a structure that's easier to see than read: a diagram, a timeline, a map
 
-- Check out the current project state first (files, docs, recent commits)
-- Before asking detailed questions, assess scope: if the request describes multiple independent subsystems (e.g., "build a platform with chat, file storage, billing, and analytics"), flag this immediately. Don't spend questions refining details of a project that needs to be decomposed first.
-- If the project is too large for a single work project, help the user decompose into sub-projects: what are the independent pieces, how do they relate, what order should they be built? Then brainstorm the first sub-project through the normal design flow. Each sub-project gets its own project → plan → implementation cycle.
-- For appropriately-scoped projects, ask questions one at a time to refine the idea
-- Prefer multiple choice questions when possible, but open-ended is fine too
-- Only one question per message - if a topic needs more exploration, break it into multiple questions
-- Focus on understanding: purpose, constraints, success criteria
+Once they've accepted, use it for mockups to react to, side-by-side
+options, and throwaway prototypes they can click.
 
-**Exploring approaches:**
+**Spike to feel things out.** Agentic work is waterfall, but very, very
+fast. A quick throwaway build is often the cheapest way to learn what
+they want or whether something works. Offer one when it would help.
+When they just want to spike, get out of the way. Spikes get no tests
+or minimal ones, aren't bulletproof, and skip the plan, implementation,
+and review process. Bring what the spike taught you back into the
+conversation.
 
-- Propose 2-3 different approaches with trade-offs
-- Present options conversationally with your recommendation and reasoning
-- Lead with your recommended option and explain why
-- YAGNI ruthlessly - remove unnecessary features from every approach and design
+## Play It Back
 
-**Presenting the design:**
+Play back as you go. As soon as you understand one part well enough to
+describe it (what it's for and who it serves, say, or how one piece
+behaves), describe that part back in about 200-300 words, then return to
+questions about the next part. Playback and questions alternate through
+the whole conversation; the last chunk covers whatever is left.
 
-- Once you believe you understand what you're building, present the design
-- Scale each section to its complexity: a few sentences if straightforward, up to 200-300 words if nuanced
-- Ask after each section whether it looks right so far
-- Cover: architecture, components, data flow, error handling, testing
-- Be ready to go back and clarify if something doesn't make sense
+Only what they said goes in as theirs. Anything you filled in goes in
+as your proposal, with your reason. End each chunk by asking what's wrong
+or missing.
 
-**Design for isolation and clarity:**
+Before you send a chunk, check it: does it describe something they'll
+look at, like a page, a screen, a schedule, or a printout? If so, put a
+text sketch next to the description. If the look itself is theirs to
+decide and they haven't seen the visual companion offer yet, send the
+offer instead (its own message, below) and hold the chunk for the next
+message. Once they've accepted, put a mockup next to the description.
 
-- Break the system into smaller units that each have one clear purpose, communicate through well-defined interfaces, and can be understood and tested independently
-- For each unit, you should be able to answer: what does it do, how do you use it, and what does it depend on?
-- Can someone understand what a unit does without reading its internals? Can you change the internals without breaking consumers? If not, the boundaries need work.
-- Smaller, well-bounded units are also easier for you to work with - you reason better about code you can hold in context at once, and your edits are more reliable when files are focused. When a file grows large, that's often a signal that it's doing too much.
+## Size the Work
 
-**Working in existing codebases:**
+Once you understand what they want and they've picked an approach, say
+how big the work is in plain words. They can override it.
 
-- Explore the current structure before proposing changes. Follow existing patterns.
-- Where existing code has problems that affect the work (e.g., a file that's grown too large, unclear boundaries, tangled responsibilities), include targeted improvements as part of the design - the way a good developer improves code they're working in.
-- Don't propose unrelated refactoring. Stay focused on what serves the current goal.
+| Size | The design doc |
+|------|----------------|
+| A small change | a short one: what you already covered together, written down |
+| A project | the full written design (below) |
 
-## After the Design (architectural path)
+Short or full, the design doc has an **Approaches** part: the two or
+three ways you considered building it, what each trades off, which one
+they picked, and why. They pick in the conversation, before you write
+the doc.
 
-**Work Project:**
+If it grows mid-task, stop, say so, and step up a size.
 
-Create the project file in the Obsidian work vault after the user approves the design.
+If this is really several independent projects, say so, agree on an
+order, and brainstorm them one at a time.
+
+## The Written Design
+
+Write a plain document a talented builder in the domain could plan
+from without going back to your human partner. Cover:
+
+- intent and the why
+- goals, non-goals, anti-goals
+- constraints
+- approaches (above)
+- the parts of the how they decided, as they decided them
+- what's left to the builder
+
+For a small change, the short design covers the same points in a line
+or two each and goes straight to your human partner, without the
+builder check.
+
+**Where it goes:** the work project file in the Obsidian work vault.
+Your human partner's preferences override this.
 
 1. Derive a slug from the project name: lowercase, hyphenated, no spaces.
 2. Create the project directory:
@@ -255,49 +267,77 @@ Create the project file in the Obsidian work vault after the user approves the d
    - `## Plans` initially empty unless a plan already exists
    - `## Tasks` with the task breakdown from brainstorming
    - `## Changelog` initially empty
-   - `## Notes` with the approved design, decisions, constraints, and investigation notes
+   - `## Notes` with the design doc, decisions, constraints, and
+     investigation notes
 4. Open the project file in Neovim:
    ```bash
    ~/.claude/skills/neovim/scripts/nvim-open --editor ~/stripe/work/projects/<slug>/project.md
    ```
 
-**Project Self-Review:**
-After writing the project file, look at it with fresh eyes:
+**Builder check** (for a project): dispatch a fresh subagent with
+`builder-check-prompt.md` in this directory. When you tell your human
+partner you're writing it up, say a reviewer will read it first and you
+may come back once with a few questions. Don't hand over the document
+until the check is back. Sort what the builder asks into three piles:
 
-1. **Placeholder scan:** Any "TBD", "TODO", incomplete sections, or vague requirements? Fix them.
-2. **Internal consistency:** Do any sections contradict each other? Does the architecture match the feature descriptions?
-3. **Scope check:** Is this focused enough for a single implementation plan, or does it need decomposition?
-4. **Ambiguity check:** Could any requirement be interpreted two different ways? If so, pick one and make it explicit.
+- **Answered already** by the conversation or the project: put the answer
+  in the document.
+- **Minor:** a sensible builder could settle it without changing what gets
+  built. Settle it yourself and mark it in the document as your call.
+- **Theirs:** only your human partner can answer it, and the answer changes
+  what gets built.
 
-Fix any issues inline. No need to re-review — just fix and move on.
+Bring the "theirs" pile in one message, most important first. Update the
+document with their answers, then hand it over with a short list of the
+calls you made so they can check those while reading. That's the only
+round of questions the check produces. Without a subagent tool, read the
+document as that builder yourself.
 
-**User Review Gate:**
-After the project review loop passes, ask the user to review the written project before proceeding:
+<HARD-GATE>
+Nothing gets built until your human partner approves the design doc:
+the short one for a small change, the full one for a project.
+Building includes writing product code, scaffolding, installing
+dependencies, creating projects, and invoking an implementation skill.
+Reading and exploring are fine.
 
-> "Project created at `~/stripe/work/projects/<slug>/project.md`. Please review it and let me know if you want changes before we write an implementation plan."
+Two exceptions. If they opted out of the questions, the skill is done
+and the gate goes with it. A spike they said yes to may be built; it
+stays labeled throwaway, and keeping what it produced is a new request
+that comes back through this gate.
 
-Wait for the user's response. If they request changes, make them and re-run the project review loop. Only proceed once the user approves.
+After the design doc is approved, the next step is the plan: invoke
+writing-plans and no other skill.
+</HARD-GATE>
 
-**Implementation:**
+## Red Flags
 
-- Invoke the writing-plans skill to create a detailed implementation plan
-- Do NOT invoke any other skill. writing-plans is the next step.
+| Thought | Reality |
+|---------|---------|
+| "I'll offer a menu of what they might want" | Options steer. Ask them to describe it first. |
+| "I'll fill in sensible defaults" | Good. Say them out loud. A default they never heard is one they couldn't reject. |
+| "I've answered their questions, so I'll write the doc" | Lay out the approaches first, in a message of their own (or, when nothing was open from the start, in your first message's short design). |
+| "I should explain the process first" | Ask your question. The process shows itself. |
+| "They said 'sounds good' to the idea" | Approval covers what you showed them. A design doc you haven't written isn't approved. |
+| "The spike works, I'll keep building on it" | Keeping it is a new request. Back through the gate. |
 
 ## Visual Companion
 
-A browser-based companion for showing mockups, diagrams, and visual options during brainstorming. Available as a tool — not a mode. Accepting the companion means it's available for questions that benefit from visual treatment; it does NOT mean every question goes through the browser.
+A browser tab for showing mockups, diagrams, and prototypes. It's a
+tool, not a mode: accepting it doesn't send every question to the
+browser.
 
-**Offering the companion (just-in-time):** Do NOT offer it upfront. Wait until a question would genuinely be clearer shown than told — a real mockup / layout / diagram question, not merely a UI *topic*. The first time that happens, offer it then, as its own message:
-> "This next part might be easier if I show you — I can put together mockups, diagrams, and comparisons in a browser tab as we go. It's still new and can be token-intensive. Want me to? I'll open it for you."
+**Offer it just-in-time.** Offer it the first time one of the moments
+above comes up, never upfront. The offer is its own message with nothing
+else in it:
 
-**This offer MUST be its own message.** Only the offer — no clarifying question, summary, or other content. Wait for the user's response. If they accept, start the server with `--open` so their browser opens to the first screen automatically. If they decline, continue text-only and don't offer again unless they raise it.
+> "This might be easier if I show you. Want me to open a browser tab with some mockups?"
 
-**Per-question decision:** Even after the user accepts, decide FOR EACH QUESTION whether to use the browser or the terminal. The test: **would the user understand this better by seeing it than reading it?**
+If they decline, stay in text and don't offer again unless they raise it.
 
-- **Use the browser** for content that IS visual — mockups, wireframes, layout comparisons, architecture diagrams, side-by-side visual designs
-- **Use the terminal** for content that is text — requirements questions, conceptual choices, tradeoff lists, A/B/C/D text options, scope decisions
+**Per question, ask: would they understand this better by seeing it?**
+Mockups, layouts, diagrams, and side-by-side designs go in the browser.
+Requirements, scope, tradeoffs, and conceptual choices stay in text. A
+question about a UI topic isn't automatically a visual question.
 
-A question about a UI topic is not automatically a visual question. "What does personality mean in this context?" is a conceptual question — use the terminal. "Which wizard layout works better?" is a visual question — use the browser.
-
-If they agree to the companion, read the detailed guide before proceeding:
-`skills/brainstorming/visual-companion.md`
+If they accept, read `visual-companion.md` in this directory before
+starting the server.
