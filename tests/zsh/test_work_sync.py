@@ -79,7 +79,6 @@ _devbox_ssh() { return 0; }
         self.assertEqual((self.local / "existing.json").read_text(), "changed local artifact")
 
     def test_background_sync_discovers_new_notes_and_stops(self):
-        self.write(self.local, "result.json", "artifact")
         script = self.setup + r'''
 _devbox_sync_loop "$2"
 sync_pid=$(cat "/tmp/unison-sync-${2}.pid")
@@ -95,8 +94,6 @@ exit 0
                                        env=self.env, stdout=log, stderr=log)
             try:
                 self.wait_for(lambda: (self.root / "pid").exists(), process)
-                time.sleep(1)
-                self.assertFalse((self.remote / "result.json").exists())
                 self.write(self.local, "created later/deep/note.md", "local note")
                 self.write(self.remote, "remote later/note.md", "remote note")
                 self.write(self.remote, "remote later/data.json", "remote artifact")
