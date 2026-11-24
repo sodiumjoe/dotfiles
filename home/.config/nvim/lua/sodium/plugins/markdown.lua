@@ -214,7 +214,7 @@ return {
             {
                 "<leader>ww",
                 function()
-                    local work_bin = vim.env.HOME .. "/bin/work"
+                    local work_bin = require("sodium.agentic_utils").work_bin
                     local spin = require("sodium.spinner")
                     spin.start("work")
                     vim.fn.system({ work_bin, "ensure" })

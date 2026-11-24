@@ -1,5 +1,6 @@
 local M = {}
-local work_bin = vim.env.HOME .. "/bin/work"
+local agentic_utils = require("sodium.agentic_utils")
+local work_bin = agentic_utils.work_bin
 
 local function git(toplevel, args)
     local cmd = { "git", "-C", toplevel }
@@ -70,12 +71,7 @@ function M.open_file_picker()
                 ctx.preview:set_lines({ "No diff available" })
             end
         end,
-        sort = function(a, b)
-            if a.score ~= b.score then
-                return a.score > b.score
-            end
-            return a.sort_idx < b.sort_idx
-        end,
+        sort = agentic_utils.sort_by_score,
         format = function(item)
             local marker = item.reviewed and "[x] " or "[ ] "
             local hl = item.reviewed and "SnacksPickerComment" or "SnacksPickerDir"
@@ -283,12 +279,7 @@ function M.pick_base_and_review()
         on_show = function()
             vim.cmd.stopinsert()
         end,
-        sort = function(a, b)
-            if a.score ~= b.score then
-                return a.score > b.score
-            end
-            return a.sort_idx < b.sort_idx
-        end,
+        sort = agentic_utils.sort_by_score,
         format = function(item)
             return { { item.text } }
         end,
