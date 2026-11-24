@@ -103,7 +103,7 @@ Codex and Karabiner-Elements save their configs by replacing the file, which tur
 
 ### Post-merge Hook
 
-`hooks/post-merge` regenerates static files after `git pull` when sources changed, runs `dotfiles-reconcile` when files under `home/` were added, deleted or renamed, and runs `dotfiles-diff --quiet` to warn about drift in mutable files. Reconcile creates links for new files and prunes links whose source was deleted, so a merge that adds or removes a Neovim module takes effect without a manual relink. Git does not run `post-merge` for rebases at all, so `git pull --rebase` skips it; run `dotfiles-generate` by hand after one.
+The repository sets its own `core.hooksPath=hooks`, because Stripe's global `core.hooksPath=/etc/stripe/git_hooks` would otherwise replace it, and Stripe's `post-merge` does not pass through to a repository's own hook. `hooks/stripe-hook`, linked as `commit-msg`, `post-checkout`, `post-rewrite`, `pre-commit` and `pre-push`, runs Stripe's hook of the same name, so the PII scan and Stripe's other checks still run. `hooks/post-merge` runs Stripe's `post-merge` first, then regenerates static files after `git pull` when sources changed, runs `dotfiles-reconcile` when files under `home/` were added, deleted or renamed, and runs `dotfiles-diff --quiet` to warn about drift in mutable files. Reconcile creates links for new files and prunes links whose source was deleted, so a merge that adds or removes a Neovim module takes effect without a manual relink. Git does not run `post-merge` for rebases at all, so `git pull --rebase` skips it; run `dotfiles-generate` by hand after one.
 
 ### Conditional Symlinks
 

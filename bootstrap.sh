@@ -104,8 +104,7 @@ echo "Using DOTFILES_ENV=$DOTFILES_ENV (wrote ~/.dotfiles-env)"
 # --- Git hooks ---
 
 if [ -d .git ]; then
-  mkdir -p .git/hooks
-  ln -sf ../../hooks/post-merge .git/hooks/post-merge
+  git config core.hooksPath hooks
 fi
 
 # --- Pinned npm tool binaries (ACP providers, language servers, formatters) ---

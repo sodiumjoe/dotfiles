@@ -9,6 +9,11 @@
 
 cd "$(git rev-parse --show-toplevel)"
 
+stripe_hook="${DOTFILES_STRIPE_HOOKS:-/etc/stripe/git_hooks}/post-merge"
+if [ -z "${DOTFILES_STRIPE_HOOK:-}" ] && [ -x "$stripe_hook" ]; then
+  DOTFILES_STRIPE_HOOK=1 "$stripe_hook" "$@" || true
+fi
+
 changed=$(git diff-tree -r --name-only ORIG_HEAD HEAD 2>/dev/null || true)
 
 needs_regen=false

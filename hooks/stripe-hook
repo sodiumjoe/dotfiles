@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+name="$(basename "$0")"
+[ -n "${DOTFILES_STRIPE_HOOK:-}" ] && exit 0
+hook="${DOTFILES_STRIPE_HOOKS:-/etc/stripe/git_hooks}/$name"
+[ -x "$hook" ] || exit 0
+DOTFILES_STRIPE_HOOK=1 exec "$hook" "$@"
