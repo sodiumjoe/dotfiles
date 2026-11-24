@@ -31,7 +31,8 @@ function M.setup(deps)
     require("sodium.agency.screen").setup()
     local Registry = require("agentic.session_registry")
     local api = {
-        annotations = deps.annotations or Context.annotations, accept_annotations = deps.accept_annotations or Context.accept_annotations,
+        annotations = deps.annotations or function() return require("sodium.annotations").annotations() end,
+        accept_annotations = deps.accept_annotations or function(captured) require("sodium.annotations").accept_annotations(captured) end,
         notify = deps.notify or function(value, level, opts) vim.notify("Agency: " .. tostring(value), level, opts) end }
     api.deps = deps
     local inventory, epoch, resuming = {}, 0, false

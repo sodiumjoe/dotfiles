@@ -286,6 +286,13 @@ end
 
 function M.setup()
     local group = vim.api.nvim_create_augroup("AgencyScreen", { clear = true })
+    vim.api.nvim_create_autocmd("VimResized", {
+        group = group,
+        callback = function()
+            M.resize()
+            M.fill()
+        end,
+    })
     vim.api.nvim_create_autocmd("WinNew", {
         group = group,
         callback = function()

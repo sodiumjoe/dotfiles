@@ -8,7 +8,7 @@ end
 
 function M.send_agent_command(command, session)
     local ok, result = pcall(function()
-        return require("sodium.agency").submit_text(command, { focus_prompt = false, session = session }, function(outcome)
+        return require("sodium.agency").submit_text(command, { session = session }, function(outcome)
             if outcome.state ~= "accepted" then
                 notify_agent_failure(outcome.error and outcome.error.message or outcome.state)
             end

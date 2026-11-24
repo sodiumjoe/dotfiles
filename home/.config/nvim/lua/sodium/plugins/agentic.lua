@@ -591,13 +591,6 @@ exec agy acp]] } } }
             },
         })
 
-        utils.augroup("AgenticResize", { clear = true })("VimResized", {
-            callback = function()
-                require("sodium.agency.screen").resize()
-                require("sodium.agency.screen").fill()
-            end,
-        })
-
         require("agentic.config").acp_providers.agency.client_class = require("sodium.agency.client").class
         require("sodium.agency").setup()
 

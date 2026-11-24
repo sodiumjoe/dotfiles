@@ -268,12 +268,7 @@ function M.get_agentic_title()
 end
 
 local function get_agentic_session_manager()
-    local ok, session_registry = pcall(require, "agentic.session_registry")
-    if not ok then
-        return nil
-    end
-    local widget = require("agentic.ui.widget_registry").get(vim.api.nvim_get_current_buf())
-    return widget and widget.session_key and session_registry.get(widget.session_key)
+    return require("sodium.agency").view_for_buffer(vim.api.nvim_get_current_buf())
 end
 
 local function get_agentic_status()

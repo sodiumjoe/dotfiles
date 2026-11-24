@@ -36,10 +36,6 @@ function M.capture(bufnr, mode)
     return captured
 end
 
-function M.annotations() return require("sodium.annotations").annotations() end
-
-function M.accept_annotations(captured) require("sodium.annotations").accept_annotations(captured) end
-
 function M.add(manager, captured, kind)
     if kind == "diagnostics" then manager.diagnostics_list:add_many(captured.diagnostics); return end
     if captured.selection then
