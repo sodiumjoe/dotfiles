@@ -1,5 +1,6 @@
 local M = {}
 local labels = { ["codex-acp"] = "Codex", ["claude-agent-acp"] = "Claude" }
+M.labels = labels
 
 function M.epoch(timestamp)
     if type(timestamp) ~= "string" then return nil end

@@ -1,6 +1,6 @@
 local M = {}
 
-local labels = { ["codex-acp"] = "Codex", ["claude-agent-acp"] = "Claude" }
+local labels = require("sodium.agency.session_list").labels
 
 function M.select(result, valid, callback)
     if not valid() then return end

@@ -1,9 +1,6 @@
 local M = {}
 local Control = require("sodium.agency.control")
-
-local function failure(code, message)
-    return { code = code, message = message or code:lower():gsub("_", " ") }
-end
+local failure = Control.failure
 
 function M.validate(result)
     assert(type(result) == "table" and result.state == "agents" and type(result.agents) == "table" and vim.islist(result.agents))

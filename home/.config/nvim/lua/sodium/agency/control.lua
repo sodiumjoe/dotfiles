@@ -23,6 +23,21 @@ local function target(value)
     assert(type(value) == "table" and valid_id(value.agentId) and valid_id(value.handlerGeneration) and valid_id(value.providerGeneration))
 end
 
+function M.failure(code, message)
+    return { code = code, message = message or code:lower():gsub("_", " ") }
+end
+
+function M.target(view)
+    local record = view and view.record
+    if not record or not record.launch or record.launch == vim.NIL then return end
+    return { agentId = record.definition.agentId, handlerGeneration = record.launch.handlerGeneration,
+        providerGeneration = record.launch.providerGeneration }
+end
+
+function M.session_id(agent_id) return "agency:" .. agent_id end
+
+function M.agent_id(session_id) return type(session_id) == "string" and session_id:match("^agency:(.+)$") or nil end
+
 local activities = { starting = true, idle = true, working = true, stopping = true }
 
 local function present(value) return value ~= nil and value ~= vim.NIL end
@@ -96,7 +111,7 @@ function M.new(deps)
         end
         local function fail(code)
             if job then pcall(job.kill, job, 15) end
-            finish({ code = code, message = code:lower():gsub("_", " ") })
+            finish(M.failure(code))
         end
         local ok, handle = pcall(system, args, { cwd = options.cwd or vim.fn.getcwd(), env = environment,
             text = false, stdout = function(err, chunk)

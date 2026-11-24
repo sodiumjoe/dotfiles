@@ -1,14 +1,8 @@
 local M = {}
 local controller
 local Context = require("sodium.agency.context")
-
-local function failure(code) return { code = code, message = code:lower():gsub("_", " ") } end
-local function tuple(row)
-    local record = row and row.record
-    if not record or record.version ~= 3 or not record.launch or record.launch == vim.NIL then return end
-    return { agentId = record.definition.agentId, handlerGeneration = record.launch.handlerGeneration,
-        providerGeneration = record.launch.providerGeneration }
-end
+local Control = require("sodium.agency.control")
+local failure, tuple = Control.failure, Control.target
 
 function M.commands(api)
     local commands = { AgencyPermissions = { "permissions", 0 }, Agency = { "roster", 0 }, AgencyCurrent = { "current", 0 }, AgencyNew = { "new", 0 },
@@ -20,8 +14,8 @@ function M.commands(api)
         end, { nargs = spec[2], force = true, complete = spec[2] == 1 and function(prefix)
             local ids = {}
             for _, row in ipairs(api.inventory()) do
-                local id = row.record.version == 3 and row.record.definition.agentId
-                if id and id:sub(1, #prefix) == prefix then ids[#ids + 1] = id end
+                local id = row.record.definition.agentId
+                if id:sub(1, #prefix) == prefix then ids[#ids + 1] = id end
             end
             return ids
         end or nil })
@@ -115,8 +109,7 @@ function M.setup(deps)
     end
     local function open(row, focus)
         local record = assert(row.record)
-        assert(record.version == 3, "Unavailable legacy Agency session")
-        local id, agent = "agency:" .. record.definition.agentId, assert(client(), "Agency is not configured")
+        local id, agent = Control.session_id(record.definition.agentId), assert(client(), "Agency is not configured")
         local manager = Rebind.holder(id, agent)
         if manager then
             if Rebind.dead(manager, tuple(row)) then return reveal(Rebind.reattach(manager, row)) end
@@ -224,7 +217,7 @@ function M.setup(deps)
             end
             if err then report(err); if callback then callback(err) end; return end
             for _, row in ipairs(result.agents) do
-                if row.record.version == 3 and row.record.definition.agentId == id then
+                if row.record.definition.agentId == id then
                     if expected and not vim.deep_equal(tuple(row), tuple(expected)) then err = failure("STALE_PROVIDER")
                     elseif action == "restore" then
                         local ok, manager = pcall(open, row)
@@ -252,12 +245,12 @@ function M.setup(deps)
     function api.restore(id, callback) selected(id, callback, "restore") end
     function api.recover(manager)
         local current, key = vim.deepcopy(manager._agency_binding), manager.session_key
-        local id = current and current.agentId or manager._agency_unavailable and type(manager.session_id) == "string" and manager.session_id:match("^agency:(.+)$")
+        local id = current and current.agentId or manager._agency_unavailable and Control.agent_id(manager.session_id)
         if not id or resuming then return end
         api.page({}, function(err, result)
             if err or Registry.get(key) ~= manager or not vim.deep_equal(manager._agency_binding, current) then return end
             for _, row in ipairs(result.agents) do
-                if row.record.version == 3 and row.record.definition.agentId == id then
+                if row.record.definition.agentId == id then
                     local live = row.live and row.record.phase == "ready" and tuple(row)
                     if live and vim.deep_equal(live, current) then return end
                     if live and current then api.notify("This session was bound to an earlier run of its agent; reattaching. Send the prompt again once it loads")
@@ -381,7 +374,7 @@ function M.setup(deps)
     function api.resume()
         if resuming or vim.g.agency_reload_running then return end
         local attached = {}
-        for _, manager in ipairs(Rebind.managers()) do attached[#attached + 1] = manager.session_id:sub(8) end
+        for _, manager in ipairs(Rebind.managers()) do attached[#attached + 1] = Control.agent_id(manager.session_id) end
         if #attached == 0 then return end
         resuming = true
         local progress = { id = "agency_resume", title = "Agency" }
@@ -390,7 +383,7 @@ function M.setup(deps)
         local function settled(result)
             local live = {}
             for _, row in ipairs(result.agents) do
-                if row.record.version == 3 and row.live and row.record.phase == "ready" then live[row.record.definition.agentId] = true end
+                if row.live and row.record.phase == "ready" then live[row.record.definition.agentId] = true end
             end
             for _, id in ipairs(attached) do if not live[id] then return false end end
             return true

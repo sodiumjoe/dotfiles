@@ -1,4 +1,5 @@
 local M = {}
+local Control = require("sodium.agency.control")
 
 function M.agency(manager)
     return manager ~= nil and manager.agent.provider_config == require("agentic.config").acp_providers.agency
@@ -7,7 +8,7 @@ end
 function M.managers()
     local managers = {}
     for _, manager in ipairs(require("agentic.session_registry").list()) do
-        if M.agency(manager) and type(manager.session_id) == "string" and manager.session_id:match("^agency:") then managers[#managers + 1] = manager end
+        if M.agency(manager) and Control.agent_id(manager.session_id) then managers[#managers + 1] = manager end
     end
     return managers
 end
@@ -16,13 +17,6 @@ function M.holder(id, agent)
     for _, manager in ipairs(require("agentic.session_registry").list()) do
         if manager.agent == agent and manager.session_id == id then return manager end
     end
-end
-
-local function tuple(view)
-    local record = view and view.record
-    if not record or record.version ~= 3 or not record.launch or record.launch == vim.NIL then return end
-    return { agentId = record.definition.agentId, handlerGeneration = record.launch.handlerGeneration,
-        providerGeneration = record.launch.providerGeneration }
 end
 
 function M.dead(manager, live)
@@ -92,8 +86,8 @@ function M.run(views, opts, callback)
     opts = opts or {}
     local ready, known = {}, {}
     for _, view in ipairs(views or {}) do
-        if view.record.version == 3 then known[view.record.definition.agentId] = true end
-        if view.record.version == 3 and view.live and view.record.phase == "ready" and tuple(view) then ready[view.record.definition.agentId] = view end
+        known[view.record.definition.agentId] = true
+        if view.live and view.record.phase == "ready" and Control.target(view) then ready[view.record.definition.agentId] = view end
     end
     local summary, settled = { rebound = 0, stopped = {}, missing = {}, failed = {}, timed_out = false }, false
     local timer = assert(vim.uv.new_timer())
@@ -135,13 +129,13 @@ function M.run(views, opts, callback)
             finish()
         end
         for _, manager in ipairs(listed and managers or {}) do
-            local agent_id = manager.session_id:sub(8)
+            local agent_id = Control.agent_id(manager.session_id)
             local view = ready[agent_id]
             if not view then
                 local list = known[agent_id] and summary.stopped or summary.missing
                 list[#list + 1] = agent_id
                 if not known[agent_id] then M.gone(manager) end
-            elseif not M.dead(manager, tuple(view)) then
+            elseif not M.dead(manager, Control.target(view)) then
                 summary.rebound = summary.rebound + 1
             else
                 local token = {}

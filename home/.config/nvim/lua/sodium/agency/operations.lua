@@ -1,25 +1,10 @@
 local M = {}
 local null = vim.NIL
-
-local function error_value(code)
-    return { code = code, message = code:lower():gsub("_", " ") }
-end
-
-local function tuple_of(view)
-    local record = view.record
-    if record.version ~= 3 or not record.launch or record.launch == null then
-        return nil
-    end
-    return {
-        agentId = record.definition.agentId,
-        handlerGeneration = record.launch.handlerGeneration,
-        providerGeneration = record.launch.providerGeneration,
-    }
-end
+local Control = require("sodium.agency.control")
+local error_value, tuple_of = Control.failure, Control.target
 
 function M.new(deps)
     deps = deps or {}
-    local Control = require("sodium.agency.control")
     local request = deps.request or require("sodium.agency.roster").request
     local select_agent = deps.select_agent
         or function(agents, callback)
@@ -70,7 +55,7 @@ function M.new(deps)
             if not valid_operation(operation) then callback(error_value("CANCELLED")); return end
             if err then callback(err); return end
             for _, row in ipairs(result.agents) do
-                if row.record.version == 3 and row.record.definition.agentId == target.agentId then
+                if row.record.definition.agentId == target.agentId then
                     if not row.live or row.record.phase ~= "ready" or not tuple_of(row) then callback(error_value("NOT_READY")); return end
                     if not vim.deep_equal(tuple_of(row), target) then callback(error_value("STALE_PROVIDER")); return end
                     local manager = deps.open(row)

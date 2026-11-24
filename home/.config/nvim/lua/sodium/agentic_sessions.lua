@@ -53,7 +53,7 @@ local function restore(item, lifecycle, valid)
     if not valid() then return end
     vim.ui.select({ "Cancel", "Restore" }, { prompt = "Restore saved session with a new provider process?" }, vim.schedule_wrap(function(choice)
         if choice ~= "Restore" or not valid() then return end
-        lifecycle.restore(item.session_id:sub(8))
+        lifecycle.restore(require("sodium.agency.control").agent_id(item.session_id))
     end))
 end
 
@@ -84,7 +84,7 @@ local function agency_picker(lifecycle, valid)
                 local record = view.record
                 if record.phase == "stopped" then
                     local item = List.item(view, { status = "Stopped" })
-                    item.session_id = "agency:" .. record.definition.agentId
+                    item.session_id = require("sodium.agency.control").session_id(record.definition.agentId)
                     items[#items + 1] = item
                 end
             end

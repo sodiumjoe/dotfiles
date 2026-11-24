@@ -1,5 +1,6 @@
 local M = {}
 local List = require("sodium.agency.session_list")
+local Control = require("sodium.agency.control")
 
 local function agent_preview(ctx)
     ctx.preview:reset()
@@ -20,15 +21,16 @@ end
 local function row_item(row, active)
     local id, provider, model, cwd, phase = fields(row)
     local display = type(row.display) == "table" and row.display or {}
+    local target = active and Control.target(row)
     local same = active and active.target.agentId == id
-        and active.target.handlerGeneration == row.record.launch.handlerGeneration
-        and active.target.providerGeneration == row.record.launch.providerGeneration
+        and active.target.handlerGeneration == target.handlerGeneration
+        and active.target.providerGeneration == target.providerGeneration
     local activity = display.activity or (same and (active.busy and "working" or "idle") or nil)
     local status = ({ starting = "Starting", restoring = "Restoring", stopping = "Stopping",
         recoverable = "Needs recovery" })[phase]
         or (activity == "working" and "Working" or activity == "idle" and "Waiting for input" or "Running")
     local location = same and (active.connected and "Open in this session" or "Editor disconnected") or "Available to open"
-    local backend = ({ ["codex-acp"] = "Codex", ["claude-agent-acp"] = "Claude" })[provider] or provider
+    local backend = List.labels[provider] or provider
     local item = List.item(row, { status = status == "Waiting for input" and "Idle" or status, status_detail = status })
     item.preview[#item.preview + 1] = string.format("%-14s%s", "Connection:", location)
     local details = table.concat({ backend .. (model ~= "" and "/" .. model or ""), vim.fn.fnamemodify(cwd, ":~"), status, location }, " · ")
@@ -108,8 +110,8 @@ local function short(hostname)
 end
 
 local function owner_item(host, row, local_host, active, name)
-    local record, launch = row.record, row.record.launch
-    if record.version ~= 3 or not launch or launch == vim.NIL then
+    local record, target = row.record, Control.target(row)
+    if not target then
         return diagnostic_item(name, "Unavailable session", row, { host })
     end
     local item = row_item(row, local_host and active or nil)
@@ -121,9 +123,8 @@ local function owner_item(host, row, local_host, active, name)
     vim.list_extend(item.preview, { "Host: " .. host.hostname, "Host ID: " .. host.hostId })
     if not local_host then
         item.owner, item.view = vim.deepcopy(row), nil
-        if row.live and record.phase == "ready" and launch.handlerGeneration == host.value.handlerGeneration then
-            item.remote_ref = { hostId = host.hostId, target = { agentId = record.definition.agentId,
-                handlerGeneration = launch.handlerGeneration, providerGeneration = launch.providerGeneration } }
+        if row.live and record.phase == "ready" and target.handlerGeneration == host.value.handlerGeneration then
+            item.remote_ref = { hostId = host.hostId, target = target }
         end
     end
     return item
@@ -141,10 +142,9 @@ function M.open(controller)
         if closed or local_pending or not picker or published and remote_pending > 0 then return end
         local items, diagnostics, active = {}, {}, controller.snapshot()
         for _, row in ipairs(local_rows) do
-            if row.record.version == 3
-                and (row.record.phase == "ready" and row.live or vim.tbl_contains({ "starting", "restoring", "stopping" }, row.record.phase))
-                and row.record.launch and row.record.launch ~= vim.NIL
-                and row.record.launch.handlerGeneration == local_generation then
+            local target = Control.target(row)
+            if (row.record.phase == "ready" and row.live or vim.tbl_contains({ "starting", "restoring", "stopping" }, row.record.phase))
+                and target and target.handlerGeneration == local_generation then
                 local item = row_item(row, active)
                 item.text = "[local] · " .. item.search_text .. " · " .. item.status
                 items[#items + 1] = item
@@ -218,7 +218,7 @@ function M.open(controller)
         if publication then return end
         local row = item and item.view
         if not actionable(item) then inspect(item); return end
-        if item.remote_ref or row and row.record.version == 3 and row.record.phase == "ready" and row.live then
+        if item.remote_ref or row and row.record.phase == "ready" and row.live then
             local id, selected, ref = row and row.record.definition.agentId, vim.deepcopy(row), vim.deepcopy(item.remote_ref)
             local valid = controller.selection_guard and controller.selection_guard() or function() return true end
             after_close(p, valid,
@@ -249,7 +249,7 @@ function M.open(controller)
             attach = function(p) attach(p, p:current()) end,
             stop = function(p)
                 local item = p:current()
-                if actionable(item) and item.view and item.view.record.version == 3 then
+                if actionable(item) and item.view then
                     if publication then return end
                     local selected = vim.deepcopy(item.view)
                     local valid = controller.selection_guard and controller.selection_guard() or function() return true end
