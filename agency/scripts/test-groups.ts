@@ -8,7 +8,7 @@ const workerFiles = files.map(file => "dist/test/" + file + ".test.js")
 const cwd = fileURLToPath(new URL("../../", import.meta.url))
 const manifest = JSON.parse(await readFile(new URL("../build-manifest.json", import.meta.url), "utf8"))
 const run = await runTests({ group: "workflows", cwd, workerFiles, revision: manifest.sourceRevision,
-  command: [process.execPath, "--import=" + new URL("../test/fixtures/run-boundary.js", import.meta.url).href, "--test", "--test-concurrency=1", ...workerFiles],
+  command: [process.execPath, "--import=" + new URL("../test/fixtures/run-boundary.js", import.meta.url).href, "--test", "--test-concurrency=4", ...workerFiles],
   ...(process.env.AGENCY_TEST_EVIDENCE_PARENT ? { evidenceParent: process.env.AGENCY_TEST_EVIDENCE_PARENT } : {}) })
 process.stderr.write("test result: " + run.root + "/result.json (" + run.result.state + ")\n")
 process.exitCode = run.code
