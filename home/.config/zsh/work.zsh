@@ -37,14 +37,9 @@ fetch_remotes() {
   print -r -- "$list"
 }
 
-remotes() {
-  local picked=$(fzf < <(fetch_remotes))
-  [ -z "$picked" ] && return 0
-  local remote_name=$(echo "$picked" | cut -w -f 1 | cut -d ] -f 2)
-
-  _devbox_start_if_needed "$remote_name" || return
-
-  local host=$(_devbox_host_for_remote "$remote_name")
+_devbox_connect() {
+  local host="$1"
+  local name="$2"
 
   _devbox_agency_enroll_background "$host"
   _devbox_sync_loop "$host"
@@ -57,7 +52,22 @@ remotes() {
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
+    if [ -n "$name" ]; then
+      echo "disconnected from $name"
+    fi
   fi
+}
+
+remotes() {
+  local picked=$(fzf < <(fetch_remotes))
+  [ -z "$picked" ] && return 0
+  local remote_name=$(echo "$picked" | cut -w -f 1 | cut -d ] -f 2)
+
+  _devbox_start_if_needed "$remote_name" || return
+
+  local host=$(_devbox_host_for_remote "$remote_name")
+
+  _devbox_connect "$host"
 }
 
 godev() {
@@ -75,23 +85,12 @@ remote() {
 
   local host=$(_devbox_host_for_remote "$remote_name")
 
-  _devbox_agency_enroll_background "$host"
-  _devbox_sync_loop "$host"
-
-  _devbox_attach_tmux "$host"
-  local exit_code=$?
-  tmux unnest 2>/dev/null
-
-  _devbox_sync_loop_finish "$host"
-
-  if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
-    reset
-    echo "disconnected from $remote_name"
-  fi
+  _devbox_connect "$host" "$remote_name"
 }
 
 remote_url() {
-  osc52copy $(pay remote url $remote_name "$@")
+  local remote_name="$1"
+  osc52copy $(pay remote url $remote_name "${@:2}")
 }
 
 # Stripe environment variables
