@@ -288,14 +288,14 @@ end
 
 function M.show_help()
     vim.notify(table.concat({
-        "<leader>pf picker",
-        "<leader>pn mark reviewed and next",
+        "<leader>rf picker",
+        "<leader>rn mark reviewed and next",
         "<Tab> toggle reviewed in picker",
         "<C-o> open file without diff",
         "<leader>cc/cn/cp/cl/cd annotations",
         "<leader>ai send notes to agent",
-        "<leader>pa submit PR review",
-        "<leader>px abort review",
+        "<leader>ra submit PR review",
+        "<leader>rx abort review",
     }, "\n"), vim.log.levels.INFO)
 end
 
@@ -310,22 +310,22 @@ function M.setup()
         end
     end, { nargs = "?" })
 
-    vim.keymap.set("n", "<leader>pf", M.open_file_picker, { noremap = true, silent = true, desc = "Review file picker" })
+    vim.keymap.set("n", "<leader>rf", M.open_file_picker, { noremap = true, silent = true, desc = "Review file picker" })
     vim.keymap.set(
         "n",
-        "<leader>pn",
+        "<leader>rn",
         M.mark_reviewed_and_next,
         { noremap = true, silent = true, desc = "Mark reviewed and reopen file picker" }
     )
-    vim.keymap.set("n", "<leader>pa", M.submit, { noremap = true, silent = true, desc = "Submit PR review and exit" })
-    vim.keymap.set("n", "<leader>px", M.exit, { noremap = true, silent = true, desc = "Exit review session" })
+    vim.keymap.set("n", "<leader>ra", M.submit, { noremap = true, silent = true, desc = "Submit PR review and exit" })
+    vim.keymap.set("n", "<leader>rx", M.exit, { noremap = true, silent = true, desc = "Exit review session" })
     vim.keymap.set(
         "n",
-        "<leader>ps",
+        "<leader>rs",
         M.pick_base_and_review,
         { noremap = true, silent = true, desc = "Pick self-review base" }
     )
-    vim.keymap.set("n", "<leader>p?", M.show_help, { noremap = true, silent = true, desc = "Review keymap help" })
+    vim.keymap.set("n", "<leader>r?", M.show_help, { noremap = true, silent = true, desc = "Review keymap help" })
 end
 
 return M

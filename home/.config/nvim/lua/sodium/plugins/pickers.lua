@@ -304,7 +304,7 @@ return {
             desc = "Marks",
         },
         {
-            "<leader>r",
+            "<leader>.",
             function()
                 Snacks.picker.resume({
                     on_show = function()

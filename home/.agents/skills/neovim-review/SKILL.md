@@ -64,7 +64,7 @@ Example shape:
 
 ## PR support
 
-Neovim owns normal submission and teardown through `<leader>pa` and `<leader>px`. Only when explicitly asked in chat, use:
+Neovim owns normal submission and teardown through `<leader>ra` and `<leader>rx`. Only when explicitly asked in chat, use:
 
 - `work review submit <APPROVE|REQUEST_CHANGES|COMMENT> ["body"]`
 - `work review exit`

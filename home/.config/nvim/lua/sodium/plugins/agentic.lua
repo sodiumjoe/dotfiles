@@ -489,7 +489,7 @@ local function pick_pr_for_review()
                             function(r)
                                 vim.schedule(function()
                                     if r.code == 0 then
-                                        vim.notify("PR #" .. tostring(item.number) .. " session ready - <leader>pf", vim.log.levels.INFO)
+                                        vim.notify("PR #" .. tostring(item.number) .. " session ready - <leader>rf", vim.log.levels.INFO)
                                     else
                                         vim.notify("PR review start failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
                                     end
@@ -731,7 +731,7 @@ exec agy acp]] } } }
             desc = "Inject annotations into Agentic",
         },
         {
-            "<leader>pr",
+            "<leader>rr",
             pick_pr_for_review,
             mode = { "n" },
             desc = "Pick PR and start review session",
