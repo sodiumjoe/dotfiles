@@ -23,6 +23,13 @@ if not vim.uv.fs_stat(lazypath) then
         vim.fn.getchar()
         os.exit(1)
     end
+    local ok, lock = pcall(function()
+        return vim.json.decode(table.concat(vim.fn.readfile(vim.fn.stdpath("config") .. "/lazy-lock.json"), "\n"))
+    end)
+    local pinned = ok and type(lock) == "table" and lock["lazy.nvim"] and lock["lazy.nvim"].commit
+    if pinned then
+        vim.fn.system({ "git", "-C", lazypath, "checkout", "--quiet", pinned })
+    end
 end
 vim.opt.rtp:prepend(lazypath)
 
