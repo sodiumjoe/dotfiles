@@ -104,7 +104,7 @@ h.CursorLine = { bg = p.bg0 }
 h.Directory = { fg = syn.func }
 h.EndOfBuffer = { fg = p.bg1 }
 h.ErrorMsg = { fg = diag.error }
-h.Folded = { fg = p.fg3, bg = p.bg2 }
+h.Folded = { fg = p.fg2, italic = true }
 h.FoldColumn = { fg = p.fg3 }
 h.IncSearch = { fg = p.bg1, bg = diag.hint }
 h.CurSearch = { link = "IncSearch" }
