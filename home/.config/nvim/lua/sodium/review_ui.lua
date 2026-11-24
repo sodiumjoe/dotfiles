@@ -2,16 +2,6 @@ local M = {}
 local agentic_utils = require("sodium.agentic_utils")
 local work_bin = agentic_utils.work_bin
 
-local function git(toplevel, args)
-    local cmd = { "git", "-C", toplevel }
-    vim.list_extend(cmd, args)
-    local result = vim.system(cmd, { text = true }):wait()
-    if result.code ~= 0 then
-        return nil, vim.trim(result.stderr or "")
-    end
-    return vim.trim(result.stdout or "")
-end
-
 local function notify_agent_failure(err)
     vim.notify("Agent review failed: " .. tostring(err), vim.log.levels.ERROR)
 end
@@ -164,8 +154,8 @@ function M.mark_reviewed_and_next()
     end
     local root = session.toplevel or ""
     local filepath = vim.api.nvim_buf_get_name(0)
-    if root ~= "" and filepath:sub(1, #root + 1) == root .. "/" then
-        filepath = filepath:sub(#root + 2)
+    if root ~= "" then
+        filepath = vim.fs.relpath(root, filepath) or filepath
     end
     review.toggle_reviewed(filepath)
     local is_reviewed = review.is_reviewed(filepath)
@@ -237,6 +227,7 @@ end
 
 function M.pick_base_and_review()
     local review = require("sodium.review")
+    local git = review.git
     local toplevel = git(vim.fn.getcwd(), { "rev-parse", "--show-toplevel" })
     if not toplevel then
         vim.notify("Not a git repository", vim.log.levels.ERROR)

@@ -1,6 +1,6 @@
 local M = {}
 
-local function git(toplevel, args)
+function M.git(toplevel, args)
     local cmd = { "git", "-C", toplevel }
     vim.list_extend(cmd, args)
     local result = vim.system(cmd, { text = true }):wait()
@@ -9,6 +9,8 @@ local function git(toplevel, args)
     end
     return vim.trim(result.stdout or "")
 end
+
+local git = M.git
 
 local function read_file(path)
     local f = io.open(path, "r")
@@ -92,11 +94,11 @@ function M.toggle_reviewed(filepath)
     end
     if session.mode == "pr" and session.toplevel then
         local path = session.toplevel .. "/.review/session.json"
-        local data = M.read_comments_json(path)
+        local data = M.read_json(path)
         if data then
             data.reviewed = vim.tbl_keys(M._state.reviewed[session.id])
             table.sort(data.reviewed)
-            M.write_comments_json(path, data)
+            M.write_json(path, data)
         end
     end
 end
@@ -232,7 +234,7 @@ function M.load(toplevel)
     end
 
     local dir = toplevel .. "/.review"
-    local session = M.read_comments_json(dir .. "/session.json")
+    local session = M.read_json(dir .. "/session.json")
     if not session then
         return false
     end
@@ -280,7 +282,7 @@ function M.parse_file_diffs(diff_text)
     return diffs, files
 end
 
-function M.write_comments_json(path, data)
+function M.write_json(path, data)
     local json = vim.json.encode(data)
     local f = io.open(path, "w")
     if not f then
@@ -291,7 +293,7 @@ function M.write_comments_json(path, data)
     return true
 end
 
-function M.read_comments_json(path)
+function M.read_json(path)
     local f = io.open(path, "r")
     if not f then
         return nil

@@ -14,10 +14,7 @@ local function scratch_buffer(name, lines, filetype)
 end
 
 local function display_path(file, toplevel)
-    if toplevel and vim.startswith(file, toplevel .. "/") then
-        return file:sub(#toplevel + 2)
-    end
-    return file
+    return toplevel and vim.fs.relpath(toplevel, file) or file
 end
 
 local function filetype_from_path(path)
@@ -32,14 +29,7 @@ local function git_file_content(ref, filepath, toplevel)
             return nil, "not a git repository"
         end
     end
-    local relpath
-    if vim.startswith(filepath, toplevel .. "/") then
-        relpath = filepath:sub(#toplevel + 2)
-    elseif vim.startswith(filepath, "/") then
-        relpath = filepath:sub(#toplevel + 2)
-    else
-        relpath = filepath
-    end
+    local relpath = vim.fs.relpath(toplevel, filepath) or filepath
     local lines = vim.fn.systemlist({ "git", "-C", toplevel, "show", ref .. ":" .. relpath })
     if vim.v.shell_error ~= 0 then
         vim.fn.systemlist({ "git", "-C", toplevel, "rev-parse", "--verify", "--quiet", ref .. "^{commit}" })
