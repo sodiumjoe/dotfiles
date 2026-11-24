@@ -245,6 +245,10 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
         self.assertIn("Agency setup failed", result.stderr)
         self.assertFalse(self.status_marker.exists(), result.stdout + result.stderr)
 
+    def assert_check_failed(self):
+        result = self.run_provider_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_runtime_defaults_without_bootstrap(self):
         self.prepare_host_state()
         result = self.read_runtime()
@@ -366,19 +370,15 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
         for path, identity in before.items():
             self.assertEqual((path.read_bytes(), path.stat().st_ino), identity)
 
-    def test_disabled_profile_is_preserved_without_starting_handler(self):
-        profile = self.standard_profile()
-        profile["enabled"] = False
-        self.write_profile([profile])
-        before = self.profile_path.read_bytes()
-        self.assert_setup_failed()
-        self.assertEqual(self.profile_path.read_bytes(), before)
-
-    def test_empty_profile_is_preserved_without_starting_handler(self):
-        self.write_profile([])
-        before = self.profile_path.read_bytes()
-        self.assert_setup_failed()
-        self.assertEqual(self.profile_path.read_bytes(), before)
+    def test_disabled_or_empty_profile_is_preserved_without_starting_handler(self):
+        disabled = self.standard_profile()
+        disabled["enabled"] = False
+        for name, providers in [("disabled", [disabled]), ("empty", [])]:
+            with self.subTest(profile=name):
+                self.write_profile(providers)
+                before = self.profile_path.read_bytes()
+                self.assert_setup_failed()
+                self.assertEqual(self.profile_path.read_bytes(), before)
 
     def test_malformed_or_insecure_profile_is_never_replaced(self):
         self.write_profile([])
@@ -386,17 +386,17 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
             with self.subTest(content=content, mode=mode):
                 self.profile_path.write_text(content)
                 self.profile_path.chmod(mode)
-                self.assert_setup_failed()
+                self.assert_check_failed()
                 self.assertEqual(self.profile_path.read_text(), content)
                 self.assertEqual(self.profile_path.stat().st_mode & 0o777, mode)
 
     def test_missing_or_nonexecutable_default_executable_does_not_publish_profile(self):
         wrapper = self.claude_executable
         wrapper.chmod(0o600)
-        self.assert_setup_failed()
+        self.assert_check_failed()
         self.assertFalse(self.profile_path.exists())
         wrapper.unlink()
-        self.assert_setup_failed()
+        self.assert_check_failed()
         self.assertFalse(self.profile_path.exists())
 
     def test_missing_or_unsupported_default_adapter_does_not_publish_profile(self):
@@ -409,7 +409,7 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
                     data = json.loads(metadata.read_text())
                     data["version"] = version
                     metadata.write_text(json.dumps(data))
-                self.assert_setup_failed()
+                self.assert_check_failed()
                 self.assertFalse(self.profile_path.exists())
 
     def test_catalog_symlink_is_preserved_and_rejected(self):
@@ -417,7 +417,7 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
         target = self.host_root / "other-catalog"
         self.catalog.rename(target)
         self.catalog.symlink_to(target)
-        self.assert_setup_failed()
+        self.assert_check_failed()
         self.assertTrue(self.catalog.is_symlink())
         self.assertEqual(json.loads((target / "providers.json").read_text())["providers"], [])
 
@@ -427,7 +427,7 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
         backend = self.catalog / "backends.json"
         backend.write_text("custom backend configuration")
         backend.chmod(0o600)
-        self.assert_setup_failed()
+        self.assert_check_failed()
         self.assertFalse(self.profile_path.exists())
         self.assertEqual(backend.read_text(), "custom backend configuration")
 
@@ -443,7 +443,7 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
     def test_unsupported_backend_compatibility_is_preserved_and_rejected(self):
         backend = self.write_backend(compatibility_id="unknown-compatibility")
         before = backend.read_bytes()
-        self.assert_setup_failed()
+        self.assert_check_failed()
         self.assertEqual(backend.read_bytes(), before)
         self.assertFalse(self.profile_path.exists())
 
