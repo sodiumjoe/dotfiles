@@ -177,14 +177,10 @@ function M.open(controller)
             end
         elseif remote_pending == 0 and unavailable then diagnostics[#diagnostics + 1] = diagnostic_item("remotes", "Owner reads unavailable", { code = unavailable }) end
         List.order(items)
-        local first_session = picker.list.reverse and #diagnostics + 1 or 1
-        if picker.list.reverse then
-            vim.list_extend(diagnostics, items)
-            items = diagnostics
-        else vim.list_extend(items, diagnostics) end
+        vim.list_extend(items, diagnostics)
         picker._agency_label_width = 7
         for _, item in ipairs(items) do
-            item.group = item.issue and (picker.list.reverse and 0 or 1) or (picker.list.reverse and 1 or 0)
+            item.group = item.issue and 1 or 0
             picker._agency_label_width = math.max(picker._agency_label_width, vim.fn.strdisplaywidth(item.label) + 2)
         end
         local selected = picker.list.win:valid() and picker:current()
@@ -192,9 +188,6 @@ function M.open(controller)
             pattern = picker.input.filter.pattern, search = picker.input.filter.search } or nil
         published = true
         picker.opts.items = items
-        if not publication and picker.list.reverse and #items >= first_session and picker.input.filter.pattern == "" then
-            picker.list:set_target(first_session)
-        end
         picker:find({ refresh = true })
     end
     local function load_local()

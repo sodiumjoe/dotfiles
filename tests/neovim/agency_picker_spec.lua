@@ -298,7 +298,7 @@ describe("Agency active-agent snapshot", function()
     end
 
     for _, reverse in ipairs({ false, true }) do
-        it("keeps diagnostics below sessions with reverse=" .. tostring(reverse) .. " before and after filtering", function()
+        it("keeps diagnostics after sessions, farthest from the prompt, with reverse=" .. tostring(reverse) .. " before and after filtering", function()
             local local_read
             local picker = open(local_controller({
                 page = function(_, callback) local_read = callback end,
@@ -315,13 +315,13 @@ describe("Agency active-agent snapshot", function()
             settle(picker, 4)
             assert.are.equal("agent-a", picker:current().id)
             resize(picker, 80)
-            assert.is_truthy(rendered(picker)[4]:find("[needle]", 1, true))
+            assert.is_truthy(rendered(picker)[reverse and 1 or 4]:find("[needle]", 1, true))
             picker.input:set("'needle")
             picker:find({ refresh = false })
             settle(picker, 3)
             assert.is_true(vim.wait(1000, function() return picker:current().issue == nil end))
             picker.list:update({ force = true })
-            assert.is_truthy(rendered(picker)[3]:find("[needle]", 1, true))
+            assert.is_truthy(rendered(picker)[reverse and 1 or 3]:find("[needle]", 1, true))
             picker.input:set("'needle.example")
             picker:find({ refresh = false })
             settle(picker, 1)
