@@ -165,8 +165,8 @@ vim.api.nvim_create_autocmd("LspAttach", {
 -- Enable servers (only if executable is available)
 local lsp_servers = {
     { "rust_analyzer", "rust-analyzer" },
-    { "bazel", nil },
-    { "sorbet", nil },
+    { "bazel", "pay" },
+    { "sorbet", "pay" },
     { "eslint", nil },
     { "flow", "flow" },
     { "tsgo", nil },

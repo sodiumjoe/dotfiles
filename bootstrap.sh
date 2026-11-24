@@ -126,20 +126,18 @@ else
   echo "npm not found, skipping node-bin (ACP providers will be unavailable)" >&2
 fi
 
-if [ "$DOTFILES_ENV" = devbox ]; then
-  (
-    agency_node_bin="${NODENV_ROOT:-$HOME/.nodenv}/versions/24.13.0/bin"
-    if [ ! -x "$agency_node_bin/node" ]; then
-      echo "bootstrap.sh: Agency requires Node 24.13.0; install it with 'nodenv install 24.13.0'" >&2
-      exit 1
-    fi
-    export PATH="$agency_node_bin:$PATH"
-    echo "Installing and building Agency..."
-    npm ci --include=dev --prefix agency || exit 1
-    npm run build --prefix agency || exit 1
-    echo "Checking Agency provider..."
-    "$agency_node_bin/node" agency/dist/scripts/setup-provider.js || exit 1
-    echo "Starting Agency Handler..."
-    home/bin/agy status --json || exit 1
-  ) || echo "bootstrap.sh: Agency setup failed; fix the error above and rerun './bootstrap.sh --env=devbox' from '$PWD'" >&2
-fi
+(
+  agency_node_bin="${NODENV_ROOT:-$HOME/.nodenv}/versions/24.13.0/bin"
+  if [ ! -x "$agency_node_bin/node" ]; then
+    echo "bootstrap.sh: Agency requires Node 24.13.0; install it with 'nodenv install 24.13.0'" >&2
+    exit 1
+  fi
+  export PATH="$agency_node_bin:$PATH"
+  echo "Installing and building Agency..."
+  npm ci --include=dev --prefix agency || exit 1
+  npm run build --prefix agency || exit 1
+  echo "Checking Agency provider..."
+  "$agency_node_bin/node" agency/dist/scripts/setup-provider.js || exit 1
+  echo "Starting Agency Handler..."
+  home/bin/agy status --json || exit 1
+) || echo "bootstrap.sh: Agency setup failed; fix the error above and rerun './bootstrap.sh --env=$DOTFILES_ENV' from '$PWD'" >&2

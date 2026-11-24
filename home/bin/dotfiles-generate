@@ -50,10 +50,11 @@ fi
 #   settings_overlay  suffix of claude/settings.<x>.json
 #   brew_overlay      suffix of Brewfile.<x>, or empty for "no Brewfile"
 #   codex             whether to generate AGENTS.md and config.toml
+#   work_tracking     whether the instructions include shared/work-tracking.md
 case "$DOTFILES_ENV" in
-  work)   settings_overlay=work; brew_overlay=work; codex=true ;;
-  devbox) settings_overlay=work; brew_overlay=;     codex=true ;;
-  home)   settings_overlay=home; brew_overlay=home; codex=false ;;
+  work)   settings_overlay=work; brew_overlay=work; codex=true;  work_tracking=true ;;
+  devbox) settings_overlay=work; brew_overlay=;     codex=true;  work_tracking=true ;;
+  home)   settings_overlay=home; brew_overlay=home; codex=false; work_tracking=false ;;
   *)
     echo "dotfiles-generate: invalid DOTFILES_ENV '$DOTFILES_ENV' (expected work, devbox, or home)" >&2
     exit 2
@@ -68,8 +69,10 @@ echo "Generating .claude/CLAUDE.md..."
 {
   cat shared/base-instructions.md
   printf '\n\n'
-  cat shared/work-tracking.md
-  printf '\n\n'
+  if [ "$work_tracking" = true ]; then
+    cat shared/work-tracking.md
+    printf '\n\n'
+  fi
   cat shared/neovim.md
   printf '\n\n'
   cat claude-overlay.md
