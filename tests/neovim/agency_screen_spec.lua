@@ -1,6 +1,7 @@
 package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.path
 dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/agentic.lua").config()
-require("snacks").setup({ picker = vim.tbl_extend("force", dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/pickers.lua").opts.picker, { enabled = true }) })
+local pickers_spec = dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/pickers.lua")
+pickers_spec.config(nil, { picker = vim.tbl_extend("force", pickers_spec.opts.picker, { enabled = true }) })
 
 describe("Agency screen", function()
     local f, screen, lines, home, select_ui
@@ -318,7 +319,8 @@ describe("Agency screen", function()
         assert.are.equal(doc, in_document(chat, buf, 3, note))
     end)
 
-    it("opens a picked file from the chat in the document window at its line", function()
+    for _, how in ipairs({ "confirm", "direct" }) do
+    it("opens a picked file from the chat in the document window at its line through " .. how, function()
         vim.api.nvim_win_close(editor(), true)
         f.flush()
         local chat = f.manager.widget.win_nrs.chat
@@ -328,8 +330,12 @@ describe("Agency screen", function()
         local picker = Snacks.picker({ items = { { file = readme, text = "README.md", pos = { 3, 0 } } } })
         assert.is_true(vim.wait(2000, function() return picker:current() ~= nil end))
         assert.are.equal(chat, picker.main)
-        local action = require("snacks.picker.core.actions").resolve("confirm", picker)
-        action.action(picker, picker:current(), action)
+        if how == "confirm" then
+            local action = require("snacks.picker.core.actions").resolve("confirm", picker)
+            action.action(picker, picker:current(), action)
+        else
+            Snacks.picker.actions.jump(picker, picker:current(), {})
+        end
         assert.is_true(vim.wait(5000, function()
             local win = vim.api.nvim_get_current_win()
             return picker.preview == nil and vim.api.nvim_win_get_buf(win) == vim.fn.bufnr(readme)
@@ -343,6 +349,7 @@ describe("Agency screen", function()
         assert.are.equal(buf, vim.api.nvim_win_get_buf(chat))
         assert.are.same(cursor, vim.api.nvim_win_get_cursor(chat))
     end)
+    end
     it("keeps a picker jump to a chat buffer line in the chat", function()
         vim.api.nvim_win_close(editor(), true)
         f.flush()

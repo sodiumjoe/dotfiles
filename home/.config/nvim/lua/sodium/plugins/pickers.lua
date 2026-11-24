@@ -1,11 +1,20 @@
-local function document_jump(picker, item, action)
+local function retarget(picker, item)
     local main = picker.main
     local buf = item and item.buf
     local chat = buf and vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype:match("^Agentic")
     if main and vim.w[main].agentic_bufnr ~= nil and not chat then
         picker.main = require("sodium.agency.screen").ensure_document()
     end
-    return require("snacks.picker.actions").jump(picker, item, action)
+end
+
+local function original_jump()
+    local actions = require("snacks.picker.actions")
+    return rawget(actions, "_sodium_jump") or actions.jump
+end
+
+local function document_jump(picker, item, action)
+    retarget(picker, item)
+    return original_jump()(picker, item, action)
 end
 
 local sources = {}
@@ -38,6 +47,12 @@ return {
     "folke/snacks.nvim",
     priority = 1000,
     lazy = false,
+    config = function(_, opts)
+        require("snacks").setup(opts)
+        local actions = require("snacks.picker.actions")
+        actions._sodium_jump = original_jump()
+        actions.jump = document_jump
+    end,
     opts = {
         picker = {
             sources = sources,
