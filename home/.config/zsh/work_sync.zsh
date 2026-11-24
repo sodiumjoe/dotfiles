@@ -110,11 +110,19 @@ _devbox_attach_tmux() {
     tmux set-option -p -t "$TMUX_PANE" @remote_control_path "$control_path" 2>/dev/null || true
   fi
 
-  ssh \
-    -o ControlMaster=auto \
-    -o ControlPersist=60 \
-    -o ControlPath="$control_path" \
-    -t "$host" '"$HOME/bin/tmux" a || "$HOME/bin/tmux"'
+  local attempt exit_code
+  for attempt in 1 2; do
+    ssh \
+      -o ControlMaster=auto \
+      -o ControlPersist=60 \
+      -o ControlPath="$control_path" \
+      -t "$host" '"$HOME/bin/tmux" a || "$HOME/bin/tmux"'
+    exit_code=$?
+    (( exit_code == 255 && attempt == 1 )) || return $exit_code
+    print -u2 -- "Lost the connection to $host; reconnecting once in ${DEVBOX_RECONNECT_DELAY:-3}s..."
+    ssh -o ControlPath="$control_path" -O exit "$host" >/dev/null 2>&1
+    sleep "${DEVBOX_RECONNECT_DELAY:-3}"
+  done
 }
 
 _devbox_remote_home() {
