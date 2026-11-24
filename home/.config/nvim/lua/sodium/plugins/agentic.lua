@@ -700,6 +700,7 @@ exec agy acp]] } } }
                 tool_calls = { enabled = true, threshold = 0, fold_on_error = true, fold_completed_diffs = true },
                 thinking = { enabled = true },
                 group_adjacent = true,
+                group_icon = "",
             },
             keymaps = {
                 widget = {
