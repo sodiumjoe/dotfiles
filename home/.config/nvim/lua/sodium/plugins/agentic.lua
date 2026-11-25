@@ -371,7 +371,10 @@ local function add_task()
 end
 
 local function send_annotations_to_agentic()
-    require("sodium.agency").submit_text("Address each captured annotation.", { annotations = true, conversation = true })
+    require("sodium.agency").submit_text(
+        "Address each captured annotation.",
+        { annotations = true, conversation = true }
+    )
 end
 
 local function pick_pr_for_review()
@@ -473,7 +476,10 @@ local function pick_pr_for_review()
                     end
                     Registry.show_session(session.session_key)
                     session:on_session_ready(function()
-                        require("sodium.review_ui").send_agent_command("/neovim-review " .. tostring(item.number), session.session_key)
+                        require("sodium.review_ui").send_agent_command(
+                            "/neovim-review " .. tostring(item.number),
+                            session.session_key
+                        )
                     end)
                 end,
                 actions = {
@@ -489,7 +495,10 @@ local function pick_pr_for_review()
                             function(r)
                                 vim.schedule(function()
                                     if r.code == 0 then
-                                        vim.notify("PR #" .. tostring(item.number) .. " session ready - <leader>rf", vim.log.levels.INFO)
+                                        vim.notify(
+                                            "PR #" .. tostring(item.number) .. " session ready - <leader>rf",
+                                            vim.log.levels.INFO
+                                        )
                                     else
                                         vim.notify("PR review start failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
                                     end
@@ -507,8 +516,21 @@ return {
     "sodiumjoe/agentic.nvim",
     branch = "sodium",
     dir = vim.env.AGENTIC_NVIM_DIR ~= "" and vim.env.AGENTIC_NVIM_DIR or nil,
-    cmd = { "AgencyPermissions", "Agency", "AgencyCurrent", "AgencyNew", "AgencyOpen", "AgencyAttach", "AgencyRestore",
-        "AgencySettings", "AgencyDetach", "AgencyCancel", "AgencyStop", "AgencyInspect", "AgencyReload" },
+    cmd = {
+        "AgencyPermissions",
+        "Agency",
+        "AgencyCurrent",
+        "AgencyNew",
+        "AgencyOpen",
+        "AgencyAttach",
+        "AgencyRestore",
+        "AgencySettings",
+        "AgencyDetach",
+        "AgencyCancel",
+        "AgencyStop",
+        "AgencyInspect",
+        "AgencyReload",
+    },
     config = function()
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
@@ -540,13 +562,25 @@ return {
             notify_agent("needs permission")
         end
 
-        local providers = { agency = { name = "Agency", render_live_user_messages = true, command = "sh", args = { "-c", [[
+        local providers = {
+            agency = {
+                name = "Agency",
+                render_live_user_messages = true,
+                command = "sh",
+                args = {
+                    "-c",
+                    [[
 status=$(agy status --json) || {
     printf '%s\n' "$status" >&2
     exit 70
 }
-exec agy acp]] } } }
-        for name in pairs(require("agentic.config_default").acp_providers) do providers[name] = false end
+exec agy acp]],
+                },
+            },
+        }
+        for name in pairs(require("agentic.config_default").acp_providers) do
+            providers[name] = false
+        end
         require("agentic").setup({
             image_paste = {
                 enabled = false,
@@ -616,43 +650,57 @@ exec agy acp]] } } }
     keys = {
         {
             "<leader>ac",
-            function() require("sodium.agency").current() end,
+            function()
+                require("sodium.agency").current()
+            end,
             mode = { "n" },
             desc = "Agency current directory",
         },
         {
             "<leader>aa",
-            function() require("sodium.agency").add_context() end,
+            function()
+                require("sodium.agency").add_context()
+            end,
             mode = { "n", "v" },
             desc = "Agency add captured file or selection",
         },
         {
             "<leader>ao",
-            function() require("sodium.agency").open() end,
+            function()
+                require("sodium.agency").open()
+            end,
             mode = { "n" },
             desc = "Agency open attachment",
         },
         {
             "<leader>an",
-            function() require("sodium.agency").new() end,
+            function()
+                require("sodium.agency").new()
+            end,
             mode = { "n" },
             desc = "Agency new session",
         },
         {
             "<leader>ae",
-            function() require("sodium.agency").settings() end,
+            function()
+                require("sodium.agency").settings()
+            end,
             mode = { "n" },
             desc = "Agency agent settings",
         },
         {
             "<leader>af",
-            function() require("sodium.agency").roster() end,
+            function()
+                require("sodium.agency").roster()
+            end,
             mode = { "n" },
             desc = "Agency active agents",
         },
         {
             "<leader>as",
-            function() require("sodium.agency").stop() end,
+            function()
+                require("sodium.agency").stop()
+            end,
             mode = { "n" },
             desc = "Agency stop observed agent",
         },
