@@ -667,9 +667,10 @@ exec agy acp]],
         utils.augroup("AgenticInputRecall", { clear = true })("FileType", {
             pattern = "AgenticInput",
             callback = function(ev)
-                vim.keymap.set({ "n", "i" }, "<Up>", function()
+                vim.keymap.set("n", "k", function()
+                    local count = vim.v.count1
                     if not recall_last_prompt(ev.buf) then
-                        vim.api.nvim_feedkeys(vim.keycode("<Up>"), "n", false)
+                        vim.cmd.normal({ args = { count .. "k" }, bang = true })
                     end
                 end, { buf = ev.buf, silent = true, desc = "Recall last Agency prompt" })
             end,
