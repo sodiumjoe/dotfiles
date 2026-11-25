@@ -585,9 +585,6 @@ const commands = {
     for (const r of results) {
       if (r.status === 'drifted') {
         console.log(`${r.skill}: DRIFT DETECTED (forked: ${r.storedHash.slice(0, 8)}… current: ${r.currentHash.slice(0, 8)}…)`);
-        if (r.forkedVersion && r.forkedVersion !== r.latestVersion) {
-          console.log(`  version changed: ${r.forkedVersion} → ${r.latestVersion}`);
-        }
         if (opts.diff) {
           const { execFileSync } = require('node:child_process');
           const files = r.driftedFiles || [{ localFile: r.localFile, upstreamFile: r.upstreamFile }];

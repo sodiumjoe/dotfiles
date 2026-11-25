@@ -56,14 +56,12 @@ function checkUpstream(skillsDir = SKILLS_DIR) {
     if (!fmMatch) continue;
     const fm = fmMatch[1];
     const pluginMatch = fm.match(/plugin:\s*(.+)/);
-    const versionMatch = fm.match(/version:\s*(.+)/);
     const skillMatch = fm.match(/skill:\s*(.+)/);
     const hashMatch = fm.match(/content_hash:\s*(.+)/);
     if (!pluginMatch || !hashMatch || !skillMatch) continue;
     const plugin = pluginMatch[1].trim();
     const storedHash = hashMatch[1].trim();
     const upstreamSkill = skillMatch[1].trim();
-    const forkedVersion = versionMatch ? versionMatch[1].trim() : null;
     const upstreamBase = config.upstreams[plugin];
     if (!upstreamBase) {
       results.push({
@@ -148,7 +146,6 @@ function checkUpstream(skillsDir = SKILLS_DIR) {
         status: "drifted",
         storedHash: first.storedHash,
         currentHash: first.currentHash,
-        forkedVersion,
         upstreamFile: first.upstreamFile,
         localFile: first.localFile,
         driftedFiles,
