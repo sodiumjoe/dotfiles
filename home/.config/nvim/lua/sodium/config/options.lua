@@ -15,6 +15,7 @@ o.clipboard = [[unnamedplus]]
 o.shortmess = [[aoOtIF]]
 o.completeopt = [[menu,menuone,noselect,preview]]
 o.modeline = false
+o.sessionoptions = [[buffers,curdir,folds,help,tabpages,winsize,terminal]]
 
 o.infercase = true
 o.smartcase = true
