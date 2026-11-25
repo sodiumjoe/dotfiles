@@ -49,6 +49,23 @@ local function chat_path(path)
     end
 end
 
+local function recall_last_prompt(buf)
+    if table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") ~= "" then
+        return false
+    end
+    local manager = require("sodium.agency").view_for_buffer(buf)
+    local messages = manager and manager.chat_history and manager.chat_history.messages or {}
+    for i = #messages, 1, -1 do
+        if messages[i].type == "user" and messages[i].text ~= "" then
+            local lines = vim.split(messages[i].text, "\n", { plain = true })
+            vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+            vim.api.nvim_win_set_cursor(0, { #lines, #lines[#lines] })
+            return true
+        end
+    end
+    return false
+end
+
 local function current_path_reference()
     local path, line
     local dest = markdown_link_destination()
@@ -644,6 +661,17 @@ exec agy acp]],
                     end
                     vim.cmd.normal({ args = { "+" }, bang = true })
                 end, { buf = ev.buf, silent = true })
+            end,
+        })
+
+        utils.augroup("AgenticInputRecall", { clear = true })("FileType", {
+            pattern = "AgenticInput",
+            callback = function(ev)
+                vim.keymap.set({ "n", "i" }, "<Up>", function()
+                    if not recall_last_prompt(ev.buf) then
+                        vim.api.nvim_feedkeys(vim.keycode("<Up>"), "n", false)
+                    end
+                end, { buf = ev.buf, silent = true, desc = "Recall last Agency prompt" })
             end,
         })
     end,
