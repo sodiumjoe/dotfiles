@@ -135,6 +135,7 @@ export function createLiveRouter(input: { core: LiveCore; remotes?: () => Remote
       if (params.hostId === undefined) return json(await core.excerpt(agentId, turns))
       return json(await remote().excerpt(checked(() => hash(params.hostId)), agentId, turns))
     }
+    if (method === "agency/transcript") return json(await core.transcript(checked(() => id(params.agentId))))
     if (method === "agency/approvals") return json(await remote().approvals())
     if (method === "agency/decide") {
       const ref = checked(() => parsePermissionRef(params.ref))

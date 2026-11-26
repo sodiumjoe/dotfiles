@@ -11,6 +11,7 @@ end
 local validators = {
     ["agency/roster"] = M.validate,
     ["agency/excerpt"] = function(result) Control.excerpt(result); return result end,
+    ["agency/transcript"] = function(result) Control.transcript(result); return result end,
     ["agency/stop"] = function(result)
         assert(type(result) == "table" and result.state == "agent")
         Control.row(result.agent)

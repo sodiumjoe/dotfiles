@@ -67,6 +67,12 @@ function M.excerpt(result)
     for _, turn in ipairs(result.turns) do assert((turn.role == "user" or turn.role == "agent") and type(turn.text) == "string") end
 end
 
+function M.transcript(result)
+    assert(result.state == "transcript" and type(result.turns) == "table" and vim.islist(result.turns) and type(result.truncated) == "boolean")
+    assert(result.reason == vim.NIL or type(result.reason) == "string")
+    for _, turn in ipairs(result.turns) do assert((turn.role == "user" or turn.role == "agent") and type(turn.text) == "string") end
+end
+
 local function validate(value, argv)
     assert(type(value) == "table" and value.protocol == "agency-control/2" and valid_id(value.requestId))
     assert(value.handlerGeneration == vim.NIL or valid_id(value.handlerGeneration))

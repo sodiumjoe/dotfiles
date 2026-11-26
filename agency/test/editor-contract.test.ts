@@ -13,7 +13,7 @@ import { inspectHandlerGeneration } from "../src/platform/singleton.js"
 
 const run = promisify(execFile), root = fileURLToPath(new URL("../../../", import.meta.url))
 
-test("the editor's Lua validation accepts the real ACP roster, excerpt and stop replies and the restart reply", async t => {
+test("the editor's Lua validation accepts the real ACP roster, excerpt, transcript and stop replies and the restart reply", async t => {
   const nvim = await run("nvim", ["--version"]).then(() => true, () => false)
   if (!nvim) { t.skip("nvim is not on PATH, so the editor contract cannot be checked"); return }
   const f = await liveHandlerFixture(t)
@@ -26,6 +26,7 @@ test("the editor's Lua validation accepts the real ACP roster, excerpt and stop 
   const acp = {
     "agency/roster": JSON.stringify(await c.request("agency/roster", {})),
     "agency/excerpt": JSON.stringify(await c.request("agency/excerpt", { agentId })),
+    "agency/transcript": JSON.stringify(await c.request("agency/transcript", { agentId })),
     "agency/stop": JSON.stringify(await c.request("agency/stop", { agentId: scratch.agentId })),
     "agency/remotes": JSON.stringify(await c.request("agency/remotes", {})),
     "agency/approvals": JSON.stringify(await c.request("agency/approvals", {})),
