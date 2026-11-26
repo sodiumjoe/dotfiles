@@ -120,6 +120,7 @@ local function replay(client, handlers, manager, params)
             writer._capture_scroll, writer._apply_scroll = own_capture, own_apply
             if not manager._destroyed then
                 apply(writer, writer.bufnr)
+                require("sodium.agency.trim").trim(manager)
             end
         end)
     end
@@ -268,6 +269,7 @@ local function start(handlers, flag, cwd, send, callback, backend)
     if manager then
         handlers._agency_manager, manager[flag], manager._agency_request_cwd = manager, pending, cwd
         separate_messages(manager)
+        require("sodium.agency.trim").attach(manager)
         if type(backend) == "string" then
             manager.session_state._provider_name = backend
             manager.message_writer:set_provider_name(backend)
@@ -431,6 +433,9 @@ local function session_state(manager, params)
     if params.state == "idle" then
         Stream.flush(manager)
         manager.message_writer:finish_thinking()
+        if not manager._destroyed then
+            require("sodium.agency.trim").trim(manager)
+        end
     end
     if params.state == "unavailable" then
         mark_unavailable(manager)
