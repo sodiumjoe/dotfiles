@@ -656,6 +656,10 @@ exec agy acp]],
                 end, { buf = ev.buf, silent = true })
 
                 vim.keymap.set("n", "<CR>", function()
+                    if require("sodium.agency.trim").marker_row(ev.buf) == vim.api.nvim_win_get_cursor(0)[1] - 1 then
+                        require("sodium.agency.transcript").open(require("sodium.agency").view_for_buffer(ev.buf))
+                        return
+                    end
                     if open_path_reference() then
                         return
                     end

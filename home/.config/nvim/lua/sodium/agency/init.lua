@@ -20,6 +20,9 @@ function M.commands(api)
             return ids
         end or nil })
     end
+    vim.api.nvim_create_user_command("AgencyTranscript", function()
+        require("sodium.agency.transcript").open()
+    end, { force = true })
     vim.api.nvim_create_user_command("AgencyReload", function(args)
         require("sodium.agency.reload").run({ force = args.bang })
     end, { bang = true, force = true })
