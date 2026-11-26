@@ -87,6 +87,70 @@ describe("Agency transcript", function()
         )
     end)
 
+    it("closes a code fence left open at the end of a turn", function()
+        assert.are.same(
+            { "## Agent", "", "```lua", "local x = 1", "```", "", "## User", "", "next" },
+            Transcript.lines({
+                state = "transcript",
+                agentId = "a",
+                truncated = false,
+                reason = vim.NIL,
+                turns = { { role = "agent", text = "```lua\nlocal x = 1" }, { role = "user", text = "next" } },
+            })
+        )
+        assert.are.same(
+            { "## Agent", "", "  ~~~~", "x", "~~~~", "", "## User", "", "next" },
+            Transcript.lines({
+                state = "transcript",
+                agentId = "a",
+                truncated = false,
+                reason = vim.NIL,
+                turns = { { role = "agent", text = "  ~~~~\nx" }, { role = "user", text = "next" } },
+            })
+        )
+    end)
+
+    it("shows the reason instead of the empty notice when there are no turns", function()
+        assert.are.same(
+            { "The session file is missing." },
+            Transcript.lines({
+                state = "transcript",
+                agentId = "a",
+                turns = {},
+                truncated = false,
+                reason = "The session file is missing.",
+            })
+        )
+    end)
+
+    it("shows the reason as a quote after the truncation line", function()
+        local lines = Transcript.lines(vim.tbl_extend("force", transcript, { reason = "File was cut." }))
+        assert.are.same({ "> Older turns were not kept.", "", "> File was cut.", "", "## User" }, vim.list_slice(lines, 1, 5))
+        lines = Transcript.lines(vim.tbl_extend("force", transcript, { truncated = false, reason = "File was cut." }))
+        assert.are.same({ "> File was cut.", "", "## User" }, vim.list_slice(lines, 1, 3))
+    end)
+
+    it("does not open the transcript in another tab when the reply arrives late", function()
+        local origin = vim.api.nvim_get_current_tabpage()
+        Transcript.open(f.manager)
+        f.flush()
+        vim.cmd("tabnew")
+        local other = vim.api.nvim_get_current_tabpage()
+        reply({ result = transcript })
+        assert.is_true(vim.wait(1000, function()
+            return #notices > 0
+        end))
+        assert.are.equal("Agency: the transcript is ready; run :AgencyTranscript to open it", notices[1].message)
+        assert.are.equal(other, vim.api.nvim_get_current_tabpage())
+        for _, tab in ipairs({ origin, other }) do
+            for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+                local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win))
+                assert.is_nil(name:find("agency://transcript/", 1, true))
+            end
+        end
+        vim.cmd("tabclose")
+    end)
+
     it("opens a read-only markdown buffer in the document window from the marker's <CR>", function()
         local chat = trimmed_chat()
         vim.fn.maparg("<CR>", "n", false, true).callback()
@@ -168,6 +232,14 @@ describe("Agency transcript", function()
         assert.is_true(vim.wait(1000, function()
             return require("sodium.agency.screen").document_window() ~= nil
         end))
-        assert.are.same(rendered, vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(require("sodium.agency.screen").document_window()), 0, -1, false))
+        assert.are.same(
+            rendered,
+            vim.api.nvim_buf_get_lines(
+                vim.api.nvim_win_get_buf(require("sodium.agency.screen").document_window()),
+                0,
+                -1,
+                false
+            )
+        )
     end)
 end)

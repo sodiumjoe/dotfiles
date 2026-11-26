@@ -1,6 +1,5 @@
 local M = { LIMIT = 10000, TARGET = 7500 }
 local NS = vim.api.nvim_create_namespace("agency_trim_headers")
-local NS_PENDING_THOUGHT_FOLDS = vim.api.nvim_create_namespace("agentic_pending_thought_folds")
 
 function M.hidden(bufnr)
     return vim.b[bufnr].agency_hidden_turns or 0
@@ -42,12 +41,6 @@ local function drop_state(writer, cut)
         if row and row < cut then
             writer.tool_call_blocks[id] = nil
         end
-    end
-    if writer._pending_thought_folds then
-        writer._pending_thought_folds = vim.tbl_filter(function(id)
-            local mark = vim.api.nvim_buf_get_extmark_by_id(writer.bufnr, NS_PENDING_THOUGHT_FOLDS, id, {})
-            return mark[1] ~= nil and mark[1] >= cut
-        end, writer._pending_thought_folds)
     end
     vim.api.nvim_buf_clear_namespace(writer.bufnr, -1, 0, cut)
 end

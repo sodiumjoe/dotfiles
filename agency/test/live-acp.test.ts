@@ -177,6 +177,8 @@ test("the editor reads a transcript over its connection", async t => {
   const reply = await c.request("agency/transcript", { agentId })
   assert.equal(reply.state, "transcript")
   assert.deepEqual(reply.turns, [{ role: "user", text: "hello" }, { role: "agent", text: "answer:hello" }])
+  assert.equal(reply.truncated, false)
+  assert.equal(reply.reason, null)
   await assert.rejects(c.request("agency/transcript", { agentId: "00000000-0000-4000-8000-000000000999" }), (error: { data?: { agency?: { code?: string } } }) => error.data?.agency?.code === "NOT_FOUND")
   await f.verifyZeroSurvivors()
 })
