@@ -3,7 +3,7 @@ import test from "node:test"
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { claudeTurns, codexTurns, historyExcerpt, historySummary, liveExcerpt, sessionTranscript } from "../src/agent/excerpt.js"
+import { claudeTurns, codexTurns, historyExcerpt, historySummary, liveExcerpt, sessionExcerpt, sessionTranscript } from "../src/agent/excerpt.js"
 import type { AgentRecordV3 } from "../src/agent/types.js"
 
 const codexLine = (role: string, type: string, text: string) => JSON.stringify({ type: "response_item", payload: { type: "message", role, content: [{ type, text }] } })
@@ -97,4 +97,27 @@ test("a transcript keeps its newest turns within the reply budget and caps each 
   assert.ok(read.turns.at(-1)!.text.startsWith("119:"))
   assert.ok(read.turns.every(turn => [...turn.text].length <= 65536))
   assert.ok(read.turns.at(-1)!.text.endsWith("…"))
+})
+
+test("a transcript keeps line structure and joins a reply's records with a blank line, while excerpts collapse", async t => {
+  const root = await mkdtemp(join(tmpdir(), "agency-transcript-")), codexHome = join(root, "codex"), claudeHome = join(root, "claude")
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(join(claudeHome, "projects", "-work-repo"), { recursive: true })
+  await writeFile(join(claudeHome, "projects", "-work-repo", "claude-3.jsonl"), [
+    claudeLine("user", "fix it"),
+    claudeLine("assistant", [{ type: "text", text: "First paragraph.\n\n```ts\nconst a = 1\n  indented()\n```" }]),
+    claudeLine("assistant", [{ type: "tool_use", name: "Read" }]),
+    claudeLine("assistant", [{ type: "text", text: "- one\n- two" }]),
+    claudeLine("user", "<system-reminder>secret</system-reminder>keep"),
+  ].join("\n"))
+  const ref = { backendId: "claude-agent-acp", cwd: "/work/repo", sessionId: "claude-3" }, homes = { codexHome, claudeHome }
+  const read = await sessionTranscript(ref, homes)
+  assert.deepEqual(read!.turns, [
+    { role: "user", text: "fix it" },
+    { role: "agent", text: "First paragraph.\n\n```ts\nconst a = 1\n  indented()\n```\n\n- one\n- two" },
+    { role: "user", text: "keep" },
+  ])
+  const excerpt = await sessionExcerpt(ref, homes, 4)
+  assert.equal(excerpt.turns.length, 3)
+  assert.ok(excerpt.turns.every(turn => !turn.text.includes("\n")))
 })

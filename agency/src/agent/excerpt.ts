@@ -19,11 +19,21 @@ export function cleanTurnText(raw: string, limit = TURN_CHARS): string {
   return chars.length > limit ? chars.slice(0, limit - 1).join("") + "…" : text
 }
 
-function push(turns: ExcerptTurn[], role: ExcerptTurn["role"], raw: string, limit = TURN_CHARS): void {
-  const text = cleanTurnText(raw, limit)
+export function cleanTranscriptText(raw: string, limit = TRANSCRIPT_TURN_CHARS): string {
+  const text = raw.replace(injected, " ").replace(/^# AGENTS\.md instructions[^\n]*$/gm, " ").replace(/(?![\n\t])[\p{Cc}\p{Cf}]/gu, "").replace(/\n{3,}/g, "\n\n").trim()
+  const chars = [...text]
+  return chars.length > limit ? chars.slice(0, limit - 1).join("") + "…" : text
+}
+
+type Cleaner = { clean: (raw: string, limit?: number) => string; joiner: string }
+const EXCERPT: Cleaner = { clean: cleanTurnText, joiner: " " }
+const TRANSCRIPT: Cleaner = { clean: cleanTranscriptText, joiner: "\n\n" }
+
+function push(turns: ExcerptTurn[], role: ExcerptTurn["role"], raw: string, limit = TURN_CHARS, cleaner = EXCERPT): void {
+  const text = cleaner.clean(raw, limit)
   if (!text) return
   const last = turns[turns.length - 1]
-  if (last && last.role === role) last.text = cleanTurnText(last.text + " " + text, limit)
+  if (last && last.role === role) last.text = cleaner.clean(last.text + cleaner.joiner + text, limit)
   else turns.push({ role, text })
 }
 
@@ -40,24 +50,24 @@ function parse(line: string): Json | null {
   try { const value: unknown = JSON.parse(line); return value && typeof value === "object" && !Array.isArray(value) ? value as Json : null } catch { return null }
 }
 
-export function codexTurns(lines: readonly string[], limit = TURN_CHARS): ExcerptTurn[] {
+export function codexTurns(lines: readonly string[], limit = TURN_CHARS, cleaner = EXCERPT): ExcerptTurn[] {
   const turns: ExcerptTurn[] = []
   for (const line of lines) {
     const record = parse(line), payload = record?.payload as Json | undefined
     if (record?.type !== "response_item" || !payload || payload.type !== "message") continue
-    if (payload.role === "user") push(turns, "user", texts(payload.content, ["input_text"]), limit)
-    else if (payload.role === "assistant") push(turns, "agent", texts(payload.content, ["output_text"]), limit)
+    if (payload.role === "user") push(turns, "user", texts(payload.content, ["input_text"]), limit, cleaner)
+    else if (payload.role === "assistant") push(turns, "agent", texts(payload.content, ["output_text"]), limit, cleaner)
   }
   return turns
 }
 
-export function claudeTurns(lines: readonly string[], limit = TURN_CHARS): ExcerptTurn[] {
+export function claudeTurns(lines: readonly string[], limit = TURN_CHARS, cleaner = EXCERPT): ExcerptTurn[] {
   const turns: ExcerptTurn[] = []
   for (const line of lines) {
     const record = parse(line), message = record?.message as Json | undefined
     if (!record || record.isMeta === true || !message) continue
-    if (record.type === "user" && message.role === "user") push(turns, "user", texts(message.content, ["text"]), limit)
-    else if (record.type === "assistant") push(turns, "agent", texts(message.content, ["text"]), limit)
+    if (record.type === "user" && message.role === "user") push(turns, "user", texts(message.content, ["text"]), limit, cleaner)
+    else if (record.type === "assistant") push(turns, "agent", texts(message.content, ["text"]), limit, cleaner)
   }
   return turns
 }
@@ -241,7 +251,7 @@ export async function sessionTranscript(ref: SessionRef, homes: SessionHomes, co
   if (!path) return null
   try {
     const tail = await readTail(path, TAIL_WINDOWS[TAIL_WINDOWS.length - 1]! * 4)
-    const turns = ref.backendId === "codex-acp" ? codexTurns(tail.lines, TRANSCRIPT_TURN_CHARS) : claudeTurns(tail.lines, TRANSCRIPT_TURN_CHARS)
+    const turns = ref.backendId === "codex-acp" ? codexTurns(tail.lines, TRANSCRIPT_TURN_CHARS, TRANSCRIPT) : claudeTurns(tail.lines, TRANSCRIPT_TURN_CHARS, TRANSCRIPT)
     let first = turns.length, bytes = 0
     while (first > 0 && (bytes += Buffer.byteLength(JSON.stringify(turns[first - 1]))) <= TRANSCRIPT_BYTES) first--
     return { turns: turns.slice(first), truncated: !tail.complete || first > 0 }
